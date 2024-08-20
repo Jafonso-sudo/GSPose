@@ -8,6 +8,7 @@ dependencies:
   - python==3.8.5
   - plyfile==0.8.1
   - cudatoolkit==11.7
+  # - cudatoolkit-dev  # Replaced cudatoolkit with cudatoolkit-dev
   - pip:
     - mmcv==1.7.1
     - tqdm==4.66.2

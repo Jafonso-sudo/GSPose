@@ -403,52 +403,75 @@ def perform_segmentation_and_encoding_from_bbox(model_func, que_image, ref_datab
         'RAEncoder_cost': RAEncoder_cost,
     }
 
-def multiple_initial_pose_inference(obj_data, ref_database, device):
+def multiple_initial_pose_inference(obj_data, ref_database, device, return_loss=False):
+    # Extract the required tensors from obj_data and move them to the specified device
     camK = obj_data['camK'].to(device).squeeze()
     obj_Remb = obj_data['obj_Remb'].to(device).squeeze()
     obj_mask = obj_data['rgb_mask'].to(device).squeeze()
     bbox_scale = obj_data['bbox_scale'].to(device).squeeze()
     bbox_center = obj_data['bbox_center'].to(device).squeeze()
     
+    # Find the indices of non-zero elements in the obj_mask tensor
     que_msk_yy, que_msk_xx = torch.nonzero(obj_mask.round().squeeze(), as_tuple=True)
+    
+    # Calculate the center coordinates of the non-zero elements
     que_msk_cx = (que_msk_xx.max() + que_msk_xx.min()) / 2
     que_msk_cy = (que_msk_yy.max() + que_msk_yy.min()) / 2
+    
+    # Calculate the area of the binary mask and the probability mask
     que_bin_msk_area = obj_mask.round().sum()
     que_prob_msk_area = obj_mask.sum()
 
+    # Compute the cosine similarity between obj_Remb and ref_database['refer_Remb_vectors']
     Remb_cosim = torch.einsum('c, mc->m', obj_Remb, ref_database['refer_Remb_vectors'])
+    
+    # Find the indices of the top k elements in Remb_cosim
     max_inds = Remb_cosim.flatten().topk(dim=0, k=CFG.ROT_TOPK).indices
+    
+    # Select the corresponding rotation matrices and mask information based on the top k indices
     init_Rs = ref_database['refer_allo_Rs'][max_inds]           # Kx3x3
     selected_nnb_info = ref_database['refer_coseg_mask_info'][max_inds] # Kx4
 
+    # Extract the required information from selected_nnb_info
     nnb_ref_Cx = selected_nnb_info[:, 0]   # K
     nnb_ref_Cy = selected_nnb_info[:, 1]   # K
     nnb_ref_Tz = selected_nnb_info[:, 2]   # K
     nnb_ref_bin_area = selected_nnb_info[:, 3] # K
     nnb_ref_prob_area = selected_nnb_info[:, 4] # K
+    
+    # Calculate delta_S based on the mask area ratio
     if CFG.BINARIZE_MASK:
         delta_S = (que_bin_msk_area / nnb_ref_bin_area)**0.5
     else:
         delta_S = (que_prob_msk_area / nnb_ref_prob_area)**0.5
 
+    # Calculate delta_Px and delta_Py based on the centroid coordinates
     delta_Px = (que_msk_cx - nnb_ref_Cx) / CFG.zoom_image_scale # K
     delta_Py = (que_msk_cy - nnb_ref_Cy) / CFG.zoom_image_scale # K
     delta_Pxy = torch.stack([delta_Px, delta_Py], dim=-1)   # Kx2
+    
+    # Calculate que_Tz based on the depth ratio and scaling factor
     que_Tz = nnb_ref_Tz / delta_S * CFG.zoom_image_scale / bbox_scale # K
-
+    
+    # Calculate obj_Pxy based on delta_Pxy and bbox_scale
     obj_Pxy = delta_Pxy * bbox_scale + bbox_center    # Kx2
+    
+    # Pad obj_Pxy with ones and perform matrix multiplication with the inverse of camK
     homo_pxpy = torch_F.pad(obj_Pxy, (0, 1), value=1) # Kx3
     init_Ts = torch.einsum('ij,kj->ki', torch.inverse(camK), homo_pxpy) * que_Tz.unsqueeze(1)
     
+    # Create the initial rotation-translation matrices
     init_RTs = torch.eye(4)[None, :, :].repeat(init_Rs.shape[0], 1, 1) # Kx4x4
     init_RTs[:, :3, :3] = init_Rs.detach().cpu()
     init_RTs[:, :3, 3] = init_Ts.detach().cpu()
     init_RTs = init_RTs.numpy()
 
+    # Apply allocentric to egocentric transformation if specified
     if CFG.USE_ALLOCENTRIC:
         for idx in range(init_RTs.shape[0]):
             init_RTs[idx, :3, :4] = gs_utils.allocentric_to_egocentric(init_RTs[idx, :3, :4])[:3, :4]
 
+    # Return the final initial rotation-translation matrices
     return init_RTs
 
 def multiple_refine_pose_with_GS_refiner(obj_data, init_pose, gaussians, device):

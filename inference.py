@@ -959,6 +959,7 @@ def GS_Tracker(model_func, ref_database, frame, camK, prev_pose):
         'bbox_scale': bbox_scale,
         'bbox_center': bbox_center,
         'iter_step': iter_step,
+        'mask': fg_trunc_mask,
     }
 
 def eval_GSPose_with_database(model_func, obj_dataset, reference_database, output_pose_dir=None, save_pred_mask=False):  

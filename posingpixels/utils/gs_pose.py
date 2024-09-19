@@ -240,9 +240,13 @@ def perform_pose_estimation(model_net, reference_database, query_video_frames, q
             
     return track_outputs, images, camKs
 
-def render_gaussian_model(gaussian_object: GaussianModel, camK: np.ndarray, R: np.ndarray, T: np.ndarray, H, W, device: torch.device = None):
+def render_gaussian_model(gaussian_object: GaussianModel, camK: np.ndarray, H, W, R: np.ndarray = None, T: np.ndarray = None, device: torch.device = None):
     if not device:
         device = torch.device('cuda')
+    if R is None:
+        R = np.eye(3)
+    if T is None:
+        T = np.zeros(3)
         
     pose = np.eye(4)
     pose[:3, :3] = R

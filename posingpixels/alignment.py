@@ -62,18 +62,47 @@ class PixelToGaussianAligner:
             A tuple containing the intersections of the tracked points with the Gaussian object and the filtered tracks.
         """
         
+        self.gaussian_object.initialize_pose() # IMPORTANT: Otherwise the object will be rendered with the previous pose applied
+        
         frame = self.tracks[0, :, :2]
         
         intersections = []
         filtered_idx = []
+        
+        # Pixel to camera ray (assuming the camera is at the origin and rotated to identity)
+        def pixel_to_camera_ray(pixel, camK):
+            p_pixel = np.array([pixel[0], pixel[1], 1])
+            p_camera = np.linalg.inv(camK) @ p_pixel
+            d_ray = p_camera / np.linalg.norm(p_camera)
+            return d_ray
+
+        def apply_pose_to_ray(ray, pose):
+            R = pose[:3, :3]
+            t = pose[:3, 3]
+            ray = R.T @ ray
+            t = -R.T @ t
+            return ray, t
+        
         for i, p in tqdm.tqdm(enumerate(frame), total=frame.shape[0]):
-            pixel_ray_dir = pixel_to_ray_dir(p, self.init_K)
-            ray_origin, ray_direction = revert_pose_to_ray(np.zeros(3), pixel_ray_dir, self.init_R, self.init_T)
+            # pixel_ray_dir = pixel_to_ray_dir(p, self.init_K)
+            # ray_origin, ray_direction = revert_pose_to_ray(np.zeros(3), pixel_ray_dir, self.init_R, self.init_T)
             
-            intersection_t = ray_splat_intersection(ray_origin, ray_direction, self.gaussian_object)
-            if intersection_t is not None:
-                intersection_point = ray_origin + intersection_t * ray_direction
-                intersections.append(intersection_point)
+            # intersection_t = ray_splat_intersection(ray_origin, ray_direction, self.gaussian_object)
+            # if intersection_t is not None:
+            #     intersection_point = ray_origin + intersection_t * ray_direction
+            #     intersections.append(intersection_point)
+            # else:
+            #     filtered_idx.append(i)
+            
+            og_ray_direction = pixel_to_camera_ray(p[:2], self.init_K)
+            init_RT = np.eye(4)
+            init_RT[:3, :3] = self.init_R
+            init_RT[:3, 3] = self.init_T
+            ray_direction, ray_origin = apply_pose_to_ray(og_ray_direction, init_RT)
+            
+            intersection, intersected_point = ray_splat_intersection(ray_origin, ray_direction, self.gaussian_object)
+            if intersection is not None:
+                intersections.append(intersection)
             else:
                 filtered_idx.append(i)
                 

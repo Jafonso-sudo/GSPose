@@ -130,69 +130,135 @@ def render_points_in_2d(points: np.ndarray, K: np.ndarray) -> np.ndarray:
     pixels = K @ points
     return pixels[:2] / pixels[2]
 
-def ray_sphere_intersection(ray_origin: np.ndarray, ray_direction: np.ndarray, sphere_center: np.ndarray, sphere_radius: float) -> Optional[Tuple[float, float]]:
-    """
-    Compute the intersection of a ray with a sphere.
+# def ray_sphere_intersection(ray_origin: np.ndarray, ray_direction: np.ndarray, sphere_center: np.ndarray, sphere_radius: float) -> Optional[Tuple[float, float]]:
+#     """
+#     Compute the intersection of a ray with a sphere.
 
-    Parameters
-    ----------
-    ray_origin : np.ndarray
-        The origin of the ray.
-    ray_direction : np.ndarray
-        The direction of the ray.
-    sphere_center : np.ndarray
-        The center of the sphere.
-    sphere_radius : float
-        The radius of the sphere.
+#     Parameters
+#     ----------
+#     ray_origin : np.ndarray
+#         The origin of the ray.
+#     ray_direction : np.ndarray
+#         The direction of the ray.
+#     sphere_center : np.ndarray
+#         The center of the sphere.
+#     sphere_radius : float
+#         The radius of the sphere.
 
-    Returns
-    -------
-    Tuple[Optional[float], Optional[float]]
-        A tuple containing the two intersection points distances from the ray origin.
-    """
-    # ray_direction = ray_direction / np.linalg.norm(ray_direction)
+#     Returns
+#     -------
+#     Tuple[Optional[float], Optional[float]]
+#         A tuple containing the two intersection points distances from the ray origin.
+#     """
+#     # ray_direction = ray_direction / np.linalg.norm(ray_direction)
+#     oc = ray_origin - sphere_center
+#     a = np.dot(ray_direction, ray_direction)
+#     b = 2.0 * np.dot(oc, ray_direction)
+#     c = np.dot(oc, oc) - sphere_radius**2
+#     discriminant = b**2 - 4 * a * c
+#     if discriminant < 0:
+#         return None
+    
+#     t1 = (-b - np.sqrt(discriminant)) / (2.0 * a)
+#     t2 = (-b + np.sqrt(discriminant)) / (2.0 * a)
+    
+#     return t1, t2
+
+def ray_sphere_intersection(ray_origin, ray_direction, sphere_center, sphere_radius):
+    if sphere_radius > 0.02:
+        sphere_radius = 0.02
+    ray_origin = np.array(ray_origin)
+    ray_direction = np.array(ray_direction)
+    # Direction should be normalized
+    ray_direction = ray_direction / np.linalg.norm(ray_direction)
+    
+    # Vector from the ray origin to the sphere center
     oc = ray_origin - sphere_center
+    
+    # Coefficients of the quadratic equation
     a = np.dot(ray_direction, ray_direction)
     b = 2.0 * np.dot(oc, ray_direction)
-    c = np.dot(oc, oc) - sphere_radius**2
-    discriminant = b**2 - 4 * a * c
+    c = np.dot(oc, oc) - sphere_radius ** 2
+    
+    # Discriminant
+    discriminant = b ** 2 - 4 * a * c
+    
+    # If the discriminant is negative, the ray does not intersect the ellipsoid
     if discriminant < 0:
         return None
-    
-    t1 = (-b - np.sqrt(discriminant)) / (2.0 * a)
-    t2 = (-b + np.sqrt(discriminant)) / (2.0 * a)
-    
-    return t1, t2
 
-def ray_splat_intersection(ray_origin: np.ndarray, ray_direction: np.ndarray, gaussian_object: GaussianModel) -> Optional[float]:
-    """
-    Calculate the intersection of a ray with a splat represented by a Gaussian model.
-    Args:
-        ray_origin (np.ndarray): The origin of the ray.
-        ray_direction (np.ndarray): The direction of the ray.
-        gaussian_object (GaussianModel): The Gaussian model representing the splat.
-    Returns:
-        Optional[float]: The distance from the ray origin to the intersection point, or None if there is no intersection.
-    """
-    positions = gaussian_object.get_xyz.squeeze().detach().cpu().numpy()
-    rotations = gaussian_object.get_rotation.squeeze().detach().cpu().numpy()
-    scalings = gaussian_object.get_scaling.squeeze().detach().cpu().numpy()
+    # Calculate the intersection points
+    t1 = (-b + np.sqrt(discriminant)) / (2 * a)
+    t2 = (-b - np.sqrt(discriminant)) / (2 * a)
+
+    # Find the minimum positive t value
+    t_values = np.array([t1, t2])
+    t_positive = t_values[t_values >= 0]
+
+    # If there are no positive t values, the ray does not intersect the ellipsoid
+    if t_positive.size == 0:
+        return None
+
+    # Use the smallest positive t value
+    t = np.min(t_positive)
     
-    t = None
-    for position, rotation, scaling in zip(positions, rotations, scalings):
-        max_scaling = min(np.max(scaling), 0.02)
-        intersection = ray_sphere_intersection(ray_origin, ray_direction, position, max_scaling)
-        if intersection is None:
-            continue
-        
-        proposal_t = np.mean(intersection)
-        if proposal_t < 0:
-            continue
-        
-        if t is None or proposal_t < t:
-            t = proposal_t
+    # Use average of the two t values if it is positive
+    if t_avg := np.mean(t_values):
+        t = t_avg
     
-    return float(t) if t is not None else None
+    # Get the intersection point
+    intersection_point = ray_origin + t * ray_direction
+    
+    return intersection_point, t
+
+
+# def ray_splat_intersection(ray_origin: np.ndarray, ray_direction: np.ndarray, gaussian_object: GaussianModel) -> Optional[float]:
+#     """
+#     Calculate the intersection of a ray with a splat represented by a Gaussian model.
+#     Args:
+#         ray_origin (np.ndarray): The origin of the ray.
+#         ray_direction (np.ndarray): The direction of the ray.
+#         gaussian_object (GaussianModel): The Gaussian model representing the splat.
+#     Returns:
+#         Optional[float]: The distance from the ray origin to the intersection point, or None if there is no intersection.
+#     """
+#     positions = gaussian_object.get_xyz.squeeze().detach().cpu().numpy()
+#     rotations = gaussian_object.get_rotation.squeeze().detach().cpu().numpy()
+#     scalings = gaussian_object.get_scaling.squeeze().detach().cpu().numpy()
+    
+#     t = None
+#     for position, rotation, scaling in zip(positions, rotations, scalings):
+#         max_scaling = min(np.max(scaling), 0.02)
+#         intersection = ray_sphere_intersection(ray_origin, ray_direction, position, max_scaling)
+#         if intersection is None:
+#             continue
+        
+#         proposal_t = np.mean(intersection)
+#         if proposal_t < 0:
+#             continue
+        
+#         if t is None or proposal_t < t:
+#             t = proposal_t
+    
+#     return float(t) if t is not None else None
+
+def ray_splat_intersection(ray_origin, ray_direction, obj_gaussians):
+    # Get the Gaussian points and features
+    gaussian_points = obj_gaussians.get_xyz.squeeze().detach().cpu().numpy()
+    gaussian_rotations = obj_gaussians.get_rotation.squeeze().detach().cpu().numpy()
+    gaussian_scalings = obj_gaussians.get_scaling.squeeze().detach().cpu().numpy()
+    
+    intersection, t_min, intersected_point = None, None, None
+    for position, rotation, scaling in zip(gaussian_points, gaussian_rotations, gaussian_scalings):
+        intersection_t = ray_sphere_intersection(ray_origin, ray_direction, position, np.max(scaling))
+        if intersection_t is not None:
+            intersection_point, t = intersection_t
+            if t_min is None or t < t_min:
+                t_min = t
+                intersection = intersection_point
+                intersected_point = position
+        
+    return intersection, intersected_point
     
     
 

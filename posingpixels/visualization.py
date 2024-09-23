@@ -1,11 +1,13 @@
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 import torch
-import pytorch3d
 from pytorch3d.vis import plotly_vis
-from pytorch3d.structures import join_meshes_as_scene, Meshes, Pointclouds
+from pytorch3d.structures import Pointclouds
 import numpy as np
-import math
+import cv2
 from gaussian_object.gaussian_model import GaussianModel
+from inference import render_Gaussian_object_model
+from misc_utils import gs_utils
+
 
 def get_points_pointcloud(
     points: np.ndarray, color: Optional[np.ndarray] = None
@@ -33,6 +35,7 @@ def get_points_pointcloud(
         colors = color / 255
 
     return Pointclouds(torch.tensor(points[None]), features=torch.tensor(colors[None]))
+
 
 def get_ray_pointcloud(
     ray_origin: np.ndarray,
@@ -100,7 +103,9 @@ def get_gaussian_splat_pointcloud(
 
     posed_points = points @ pose[:3, :3].T + pose[:3, 3][None, :]
 
-    return Pointclouds(torch.tensor(posed_points[None]), features=torch.tensor(colors[None]))
+    return Pointclouds(
+        torch.tensor(posed_points[None]), features=torch.tensor(colors[None])
+    )
 
 
 def plot_pointclouds(
@@ -125,6 +130,148 @@ def plot_pointclouds(
         pointcloud_max_points=30_000,
         axis_args=plotly_vis.AxisArgs(showgrid=True),
     )
-    
+
     fig.update_layout(width=800, height=600)
     fig.show()
+
+
+def video_to_grayscale(video: np.ndarray) -> np.ndarray:
+    """
+    Convert a video to grayscale.
+
+    Parameters
+    ----------
+    video : np.ndarray
+        The video.
+
+    Returns
+    -------
+    np.ndarray
+        The grayscale video.
+    """
+    return np.array(
+        [
+            cv2.cvtColor(cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY), cv2.COLOR_GRAY2RGB)
+            for frame in video
+        ]
+    )
+
+
+def plot_points_on_video(
+    video_frames: np.ndarray, points: np.ndarray, colors: np.ndarray
+) -> np.ndarray:
+    """
+    Plot points on a video.
+
+    Parameters
+    ----------
+    video_frames : np.ndarray
+        The video frames.
+    points : np.ndarray
+        The points to plot.
+    colors : np.ndarray
+        The colors of the points. Either a single color or a color for each point.
+    """
+    if len(colors.shape) == 1:
+        colors = np.tile(colors[None], (points.shape[0], 1))
+    assert len(points) == len(colors)
+    new_video_frames = []
+    for i, frame in enumerate(video_frames):
+        frame = frame.copy()
+        frame_points = points[i]
+        for p, c in zip(frame_points, colors):
+            frame = cv2.circle(frame, tuple(p.astype(int)), 3, c.tolist(), -1)
+        new_video_frames.append(frame)
+
+    return np.array(new_video_frames)
+
+
+def overlay_gaussian_splat_on_video(
+    video_frames: np.ndarray,
+    gaussian_object: GaussianModel,
+    camKs: np.ndarray,
+    poses: Optional[np.ndarray] = None,
+    original_opacity=0.4,
+    device: Optional[torch.device] = None,
+) -> np.ndarray:
+    """
+    Overlay the Gaussian object on a video.
+
+    Parameters
+    ----------
+    video_frames : np.ndarray
+        The video frames.
+    gaussian_object : GaussianModel
+        The Gaussian object.
+    pose : Optional[np.ndarray], optional
+        The pose of the object, by default None.
+
+    Returns
+    -------
+    np.ndarray
+        The video frames with the Gaussian object overlaid.
+    """
+    if not device:
+        device = torch.device("cuda")
+    if poses is None:
+        poses = np.tile(np.eye(4), (len(video_frames), 1, 1))
+
+    new_video_frames = []
+    for frame, pose, camK in zip(video_frames, poses, camKs):
+        render = render_Gaussian_object_model(
+            gaussian_object, camK, pose, frame.shape[0], frame.shape[1], device
+        )
+        frame = cv2.addWeighted(
+            cv2.cvtColor(render, cv2.COLOR_BGR2HSV),
+            1 - original_opacity,
+            frame,
+            original_opacity,
+            1,
+        )
+        new_video_frames.append(frame)
+
+    return np.array(new_video_frames)
+
+
+def overlay_bounding_box_on_video(
+    video_frames: np.ndarray,
+    reference_database,
+    camKs: np.ndarray,
+    poses: np.ndarray,
+    color=(0, 255, 0),
+) -> np.ndarray:
+    """
+    Overlay the bounding box of the object on a video.
+
+    Parameters
+    ----------
+    video_frames : np.ndarray
+        The video frames.
+    reference_database : dict
+        The reference database for the Gaussian splat object.
+    poses : np.ndarray
+        The poses of the object.
+
+    Returns
+    -------
+    np.ndarray
+        The video frames with the bounding box overlaid.
+    """
+    cannon_3D_bbox = reference_database["obj_bbox3D"].cpu()
+    new_video_frames = []
+    for frame, pose, camK in zip(video_frames, poses, camKs):
+        track_RT = torch.as_tensor(pose, dtype=torch.float32)
+        track_bbox_KRT = (
+            torch.einsum("ij,kj->ki", track_RT[:3, :3], cannon_3D_bbox)
+            + track_RT[:3, 3][None, :]
+        )
+        track_bbox_KRT = torch.einsum("ij,kj->ki", camK, track_bbox_KRT)
+        track_bbox_pts = (
+            (track_bbox_KRT[:, :2] / track_bbox_KRT[:, 2:3]).type(torch.int64).numpy()
+        )
+        track_bbox3d_img = gs_utils.draw_3d_bounding_box(
+            frame.copy(), track_bbox_pts, color=color, linewidth=5
+        )
+        new_video_frames.append(track_bbox3d_img)
+
+    return np.array(new_video_frames)

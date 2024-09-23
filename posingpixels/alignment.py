@@ -2,15 +2,13 @@ import cv2
 import numpy as np
 import tqdm
 from gaussian_object.gaussian_model import GaussianModel
-from pytorch3d.renderer import (
-    HeterogeneousRayBundle,
-    ray_bundle_to_ray_points,
-    RayBundle,
-    TexturesAtlas,
-    TexturesVertex,
+
+from posingpixels.utils.geometry import (
+    pixel_to_ray_dir,
+    ray_splat_intersection,
+    revert_pose_to_ray,
 )
 
-from posingpixels.utils.geometry import pixel_to_ray_dir, ray_splat_intersection, revert_pose_to_ray
 
 class PixelToGaussianAligner:
     """
@@ -21,11 +19,20 @@ class PixelToGaussianAligner:
     tracks : np.ndarray
         A 3D array of shape (n_frames, n_points, 2) containing the pixel coordinates of the tracked points.
     """
-    
+
     mask: np.ndarray
     tracks: np.ndarray
-    
-    def __init__(self, mask_path: str, pixeltracker_path: str, gaussian_object: GaussianModel, initial_T: np.ndarray, initial_R: np.ndarray, initial_cam_K: np.ndarray, pixeltracker_upscale: float = 1.0):
+
+    def __init__(
+        self,
+        mask_path: str,
+        pixeltracker_path: str,
+        gaussian_object: GaussianModel,
+        initial_T: np.ndarray,
+        initial_R: np.ndarray,
+        initial_cam_K: np.ndarray,
+        pixeltracker_upscale: float = 1.0,
+    ):
         """
         Initialize the PixelToGaussianAligner with a mask and tracked points.
 
@@ -43,44 +50,48 @@ class PixelToGaussianAligner:
         self.tracks = pixeltracker_upscale * np.load(pixeltracker_path)[:, :, :2]
         self.init_T, self.init_R, self.init_K = initial_T, initial_R, initial_cam_K
         self.gaussian_object = gaussian_object
-        
+
         self.tracks = self.filter_object_tracks(self.mask, self.tracks)
-    
+
     @staticmethod
     def filter_object_tracks(mask: np.ndarray, tracks: np.ndarray) -> np.ndarray:
         frame = tracks[0]
         object_idx = mask[frame[:, 1].astype(int), frame[:, 0].astype(int)]
         return tracks[:, object_idx]
-    
+
     def align(self) -> tuple:
         """
         Align the tracked points to the Gaussian object.
-        
+
         Returns
         -------
         tuple
             A tuple containing the intersections of the tracked points with the Gaussian object and the filtered tracks.
         """
-        
-        self.gaussian_object.initialize_pose() # IMPORTANT: Otherwise the object will be rendered with the previous pose applied
-        
+
+        self.gaussian_object.initialize_pose()  # IMPORTANT: Otherwise the object will be rendered with the previous pose applied
+
         frame = self.tracks[0, :, :2]
-        
+
         intersections = []
         filtered_idx = []
-        
+
         for i, p in tqdm.tqdm(enumerate(frame), total=frame.shape[0]):
             pixel_ray_dir = pixel_to_ray_dir(p, self.init_K)
-            ray_origin, ray_direction = revert_pose_to_ray(np.zeros(3), pixel_ray_dir, self.init_R, self.init_T)
-            
-            intersection_t = ray_splat_intersection(ray_origin, ray_direction, self.gaussian_object)
+            ray_origin, ray_direction = revert_pose_to_ray(
+                np.zeros(3), pixel_ray_dir, self.init_R, self.init_T
+            )
+
+            intersection_t = ray_splat_intersection(
+                ray_origin, ray_direction, self.gaussian_object
+            )
             if intersection_t is not None:
                 intersection_point = ray_origin + intersection_t * ray_direction
                 intersections.append(intersection_point)
             else:
                 filtered_idx.append(i)
-                
+
         # Filter out points that did not intersect with the Gaussian object
         filtered_tracks = np.delete(self.tracks, filtered_idx, axis=1)
-        
+
         return intersections, filtered_tracks

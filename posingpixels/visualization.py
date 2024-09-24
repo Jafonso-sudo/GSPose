@@ -1,4 +1,5 @@
 from typing import Dict, Optional
+from matplotlib import pyplot as plt
 import torch
 from pytorch3d.vis import plotly_vis
 from pytorch3d.structures import Pointclouds
@@ -275,3 +276,33 @@ def overlay_bounding_box_on_video(
         new_video_frames.append(track_bbox3d_img)
 
     return np.array(new_video_frames)
+
+def plot_per_point_losses(
+    predictions: np.ndarray, target: np.ndarray, criterion: torch.nn.Module, title: str = "Per Point Losses",  device: Optional[torch.device] = None
+):
+    """
+    Plot the per point losses.
+
+    Parameters
+    ----------
+    predictions : np.ndarray
+        The predictions.
+    target : np.ndarray
+        The target.
+    criterion : torch.nn.Module
+        The loss function.
+    title : str, optional
+        The title of the plot, by default "Per Point Losses".
+    """
+    if not device:
+        device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    criterion = criterion.to(device)
+    
+    predictions_torch = torch.tensor(predictions, device=device)
+    target_torch = torch.tensor(target, device=device)
+    
+    losses = criterion(predictions_torch, target_torch)
+    # Sum over the last dimension
+    losses = losses.sum(-1)
+    
+    return losses.cpu().numpy()

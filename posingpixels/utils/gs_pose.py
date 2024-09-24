@@ -56,6 +56,25 @@ def load_test_data(video_directory_path: str):
 
     return query_video_frames, query_video_camKs
 
+def load_existing_gaussian_splat(reference_path: str, device: Optional[torch.device] = None):
+    if not device:
+        device = torch.device("cuda")
+    with open(reference_path, "rb") as df:
+        reference_database = pickle.load(df)
+
+    for _key, _val in reference_database.items():
+        if isinstance(_val, np.ndarray):
+            reference_database[_key] = torch.as_tensor(_val, dtype=torch.float32).to(
+                device
+            )
+
+    gs_ply_path = reference_database["obj_gaussians_path"]
+    obj_gaussians = GaussianModel(sh_degree=3)
+    obj_gaussians.load_ply(gs_ply_path)
+    print("load 3D-OGS model from ", gs_ply_path)
+    reference_database["obj_gaussians"] = obj_gaussians
+
+    return reference_database
 
 def create_or_load_gaussian_splat_from_images(
     demo_data_dir: str,

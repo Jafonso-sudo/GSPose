@@ -1,30 +1,31 @@
 import os
+import pickle
+import sys
+import time
+from argparse import ArgumentParser
 from typing import Optional
 
+import mediapy as media
+import numpy as np
 import torch
 import torch.nn.functional as F
-import numpy as np
-import time
-import sys
-import pickle
-import mediapy as media
-from argparse import ArgumentParser
+from torch.utils.data import Dataset
 
-from inference import (
-    create_reference_database_from_RGB_images,
-    ModelParams,
-    PipelineParams,
-    OptimizationParams,
-    create_3D_Gaussian_object,
-    perform_segmentation_and_encoding,
-    multiple_initial_pose_inference,
-    GS_Tracker,
-    render_Gaussian_object_model,
-)
 from config import inference_cfg as CFG
-from model.network import model_arch as ModelNet
 from dataset.demo_dataset import OnePoseCap_Dataset
 from gaussian_object.gaussian_model import GaussianModel
+from inference import (
+    GS_Tracker,
+    ModelParams,
+    OptimizationParams,
+    PipelineParams,
+    create_3D_Gaussian_object,
+    create_reference_database_from_RGB_images,
+    multiple_initial_pose_inference,
+    perform_segmentation_and_encoding,
+    render_Gaussian_object_model,
+)
+from model.network import model_arch as ModelNet
 
 
 def load_model_net(ckpt_file: str, device: Optional[torch.device] = None):
@@ -56,7 +57,10 @@ def load_test_data(video_directory_path: str):
 
     return query_video_frames, query_video_camKs
 
-def load_existing_gaussian_splat(reference_path: str, device: Optional[torch.device] = None):
+
+def load_existing_gaussian_splat(
+    reference_path: str, device: Optional[torch.device] = None
+):
     if not device:
         device = torch.device("cuda")
     with open(reference_path, "rb") as df:
@@ -76,33 +80,45 @@ def load_existing_gaussian_splat(reference_path: str, device: Optional[torch.dev
 
     return reference_database
 
+
 def create_or_load_gaussian_splat_from_images(
     demo_data_dir: str,
     obj_name: str,
     model_net: ModelNet,
     device: Optional[torch.device] = None,
+    obj_refer_dataset: Optional[Dataset] = None,
 ):
     if not device:
         device = torch.device("cuda")
 
-    refer_seq_dir = os.path.join(
-        demo_data_dir, f"{obj_name}-annotate"
-    )  # reference sequence directory
-    obj_refer_dataset = None
-    obj_database_dir = os.path.join(
-        demo_data_dir, f"{obj_name}-database"
-    )  # object database directory
-    obj_database_path = os.path.join(
-        obj_database_dir, "reference_database.pkl"
-    )  # object database file path
-
-    if not os.path.exists(obj_database_path):
-        print(f"Generate object reference database for {obj_name} ...")
+    
+    if not obj_refer_dataset:
+        refer_seq_dir = os.path.join(
+            demo_data_dir, f"{obj_name}-annotate"
+        )  # reference sequence directory
+        obj_database_dir = os.path.join(
+            demo_data_dir, f"{obj_name}-database"
+        )  # object database directory
+        obj_database_path = os.path.join(
+            obj_database_dir, "reference_database.pkl"
+        )  # object database file path
         obj_refer_dataset = OnePoseCap_Dataset(
             obj_data_dir=refer_seq_dir,
             obj_database_dir=obj_database_dir,
             use_binarized_mask=CFG.BINARIZE_MASK,
         )
+    else:
+        obj_dir = obj_refer_dataset.obj_dir
+        obj_name = obj_refer_dataset.obj_name
+        obj_database_dir = os.path.join(
+            demo_data_dir, f"{obj_dir}-database"
+        )
+        obj_database_path = os.path.join(
+            obj_database_dir, "reference_database.pkl"
+        )
+
+    if not os.path.exists(obj_database_path):
+        print(f"Generate object reference database for {obj_name} ...")
 
         reference_database = create_reference_database_from_RGB_images(
             model_net, obj_refer_dataset, save_pred_mask=True, device=device

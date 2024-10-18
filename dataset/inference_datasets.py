@@ -2,6 +2,7 @@ import os
 import sys
 import mmcv
 import json
+import pyrender
 import torch
 import numpy as np
 from PIL import Image
@@ -11,6 +12,8 @@ from pytorch3d import ops as py3d_ops
 from pytorch3d import transforms as py3d_transform
 import trimesh
 import yaml
+from scipy.spatial import ConvexHull
+
 
 PROJ_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(PROJ_ROOT)
@@ -357,6 +360,130 @@ class YCBInEOAT_Dataset(torch.utils.data.Dataset):
         depth *= ratio
         
         return width, height, depth
+    
+    def calculate_mesh_diameter(self):
+        """Calculate the diameter of the mesh."""
+        mesh = trimesh.load(self.obj_path)
+        vertices = mesh.vertices
+        # Compute the convex hull of the vertices
+        hull = ConvexHull(vertices)
+
+        # Find the maximum pairwise distance between vertices on the convex hull
+        hull_vertices = vertices[hull.vertices]
+        max_distance = 0
+
+        # Compute all pairwise distances between the hull vertices
+        for i in range(len(hull_vertices)):
+            for j in range(i+1, len(hull_vertices)):
+                dist = np.linalg.norm(hull_vertices[i] - hull_vertices[j])
+                if dist > max_distance:
+                    max_distance = dist
+        return max_distance 
+    
+    def get_rendered_image(self, degree = 7):
+        def deterministic_rotation_grid(x1, x2, x3):
+            """Generate n deterministic, uniformly spaced rotation matrices."""
+            def generate_random_z_axis_rotation(x1):
+                """Generate random rotation matrix about the z axis."""
+                R = np.eye(3)
+                R[0, 0] = R[1, 1] = np.cos(2 * np.pi * x1)
+                R[0, 1] = -np.sin(2 * np.pi * x1)
+                R[1, 0] = np.sin(2 * np.pi * x1)
+                return R
+            # There are two random variables in [0, 1) here (naming is same as paper)
+            # Rotation of all points around x axis using matrix
+            R = generate_random_z_axis_rotation(x1)
+            v = np.array([
+                np.cos(x2) * np.sqrt(x3),
+                np.sin(x2) * np.sqrt(x3),
+                np.sqrt(1 - x3)
+            ])
+            H = np.eye(3) - (2 * np.outer(v, v))
+            M = -(H @ R)
+            
+            return M
+        
+        mesh = trimesh.load(self.obj_path)
+
+        # Create a scene for PyRender
+        scene = pyrender.Scene()
+
+        # Add the 3D mesh with texture to the scene
+        mesh = pyrender.Mesh.from_trimesh(mesh)
+        mesh_pose = np.eye(4)
+        mesh_pose[2, 3] = self.diameter * 1.5 # Move the object back
+        mesh_node = scene.add(mesh, pose=mesh_pose, name="mesh")
+
+        # Camera setup
+        camera = pyrender.PerspectiveCamera(yfov=np.pi / 3.0, aspectRatio=4.0 / 3.0)
+        camera_pose = np.eye(4)  # Default camera pose, identity matrix
+        camera_pose[2, 2] = -1  # Look at the object (positive z-axis instead of default negative z-axis)
+        # camera_pose[:3, 3] = np.array([0, 0, self.diameter * 1.5]) # Move the camera back # TODO: Move based on object size
+        scene.add(camera, pose=camera_pose, name="camera")
+
+        # Light setup
+        light = pyrender.DirectionalLight(color=np.ones(3), intensity=3.0)
+        scene.add(light, pose=camera_pose)
+
+        # pyrender.Viewer(scene, use_raymond_lighting=True)
+
+        # Renderer
+        width, height = 640, 480
+        r = pyrender.OffscreenRenderer(viewport_width=width, viewport_height=height)
+
+        # Function to rotate the object and render it from different angles
+        def render_views(view_degree = 7):
+            rgb_images = []
+            poses = []
+            masks = []
+            camera_intrinsics = []
+            f = height / (2 * np.tan(camera.yfov / 2))
+            K = np.array([[f, 0, width / 2], [0, f, height / 2], [0, 0, 1]])
+            C = np.eye(4)
+            C[0, 0] = -1
+            C[1, 1] = -1
+            
+            # Create multiple views by rotating the camera around the object
+            lin_space = np.linspace(0, 1, view_degree, endpoint=False)
+            for x1 in lin_space:
+                for x2 in lin_space:
+                    for x3 in lin_space:
+                        # Rotate the camera around the object
+                        pose = mesh_pose.copy()
+                        pose[:3, :3] = deterministic_rotation_grid(x1, x2, x3)
+                        scene.set_pose(mesh_node, pose=pose)
+                        
+                        # Render the scene from this camera pose
+                        color, depth = r.render(scene, flags=pyrender.RenderFlags.RGBA) # camera_pose=pose)
+                        
+                        # Compute a binary mask (segmentation) for the object using depth map
+                        mask = depth > 0  # Binary mask where depth > 0
+                        
+                        
+                        # Store the results
+                        rgb_images.append(color[:, :, :3])  # RGB from RGBA
+                        masks.append(mask)
+                        
+                        # pose = gs_utils.allocentric_to_egocentric(pose, cam_ray = (0, 0, -1))
+                        poses.append(C @ pose) # Convert the coordintae system to the one used in GS-Pose
+                        camera_intrinsics.append(K)
+            
+            return rgb_images, poses, masks, camera_intrinsics
+        
+        rgb_images, poses, masks, camera_intrinsics = render_views(degree)
+        
+        self.save_renders(rgb_images, masks)
+        
+        return poses, camera_intrinsics
+    
+    def save_renders(self, images, masks):
+        for idx, (image, mask) in enumerate(zip(images, masks)):
+            image_path = os.path.join(self.obj_dir, 'rgb', '{:06d}.png'.format(idx))
+            mask_path = os.path.join(self.obj_dir, 'mask_visib', '{:06d}_000000.png'.format(idx))
+            
+            Image.fromarray(image.astype(np.uint8)).save(image_path)
+            Image.fromarray((mask * 255).astype(np.uint8)).save(mask_path)
+    
     def __init__(self, data_root, obj_name, 
                  subset_mode='train', 
                  obj_database_dir=None, 
@@ -364,6 +491,7 @@ class YCBInEOAT_Dataset(torch.utils.data.Dataset):
                  use_gt_mask=False,
                  use_binarized_mask=False,
                  num_refer_views=-1, # default -1 means all views
+                 degree=7, # Generates degree**3 training images
                  load_yolo_det=False, 
                  num_grid_points=4096,
                  ):
@@ -394,21 +522,26 @@ class YCBInEOAT_Dataset(torch.utils.data.Dataset):
         
         # Read camK from cam_K.txt (each line is a row of the matrix with space separated values)
         # TODO: camK might be different for training and testing
-        self.camK = gs_utils.read_numpy_data_from_txt(os.path.join(self.benchmark_dir, 'cam_K.txt'))
+        if subset_mode == 'test':
+            self.camK = gs_utils.read_numpy_data_from_txt(os.path.join(self.benchmark_dir, 'cam_K.txt'))
         
         with open(os.path.join(self.obj_dir, 'dataset_info.yml'), 'r') as f:
             self.model_info = yaml.load(f, Loader=yaml.FullLoader)
             
+        self.obj_path = os.path.join(self.obj_dir, 'textured_simple.obj')
+        self.texture_path = os.path.join(self.obj_dir, 'texture_map.png')
+            
         self.obj_ply_path = os.path.join(self.obj_dir, 'textured.ply')
-        self.obj_pointcloud = py3d_io.load_ply(self.obj_ply_path)[0].numpy() * self.to_meter_scale # convert to m
+        # TODO: They are using this in inference to calculate metrics
+        # self.obj_pointcloud = py3d_io.load_ply(self.obj_ply_path)[0].numpy() * self.to_meter_scale # convert to m
 
 
-        # self.is_symmetric = False # TODO: Don't think this is needed
+        self.is_symmetric = False # TODO: Don't think this is needed (just for logging)
         # for _key, _val in self.obj_model_info.items():
         #     if 'symmetries' in _key:
         #         self.is_symmetric = True
 
-        # self.diameter = self.obj_model_info['diameter'] * self.to_meter_scale # convert to m # TODO: No clue what this diameter refers to
+        self.diameter = self.calculate_mesh_diameter()
         
         size_x, size_y, size_z = self.get_size_from_ply()
         
@@ -426,53 +559,92 @@ class YCBInEOAT_Dataset(torch.utils.data.Dataset):
         # yolo_detection_dir = os.path.join(DATASPACE_DIR, 'bop_dataset/lm_yolo_detection/val')   # TODO: YOLO detection
         # obj_yolo_detect_name = '08{:02d}-lm{}-others'.format(self.obj_classID, self.obj_classID)
         # obj_yolo_label_dir = os.path.join(yolo_detection_dir, obj_yolo_detect_name, 'labels')
-        
-        self.poses_file = os.path.join(self.obj_dir, 'scene_gt.json')
-        with open(self.poses_file, 'r') as f:
-            self.poses_info = json.load(f)
-
-        if self.load_gt_bbox:
-            self.bboxes_file = os.path.join(self.obj_dir, 'scene_gt_info.json')
-            with open(self.bboxes_file, 'r') as f:
-                self.bboxes_info = json.load(f)
-            self.gt_bboxes = dict()
-
         self.poses = list()
         self.image_IDs = list()
         self.allo_poses = list()
         self.image_paths = list()
+        self.mask_paths = list()
         self.yolo_bboxes = dict()
-        image_subset_lists = gs_utils.read_list_data_from_txt(os.path.join(self.obj_dir, f'{self.subset_mode}.txt'))
-        for idx, img_inst in enumerate(image_subset_lists):
-            image_ID = int(img_inst)
-            if image_ID >= len(self.poses_info):
-                # TODO: This shouldn't be happening but for some reason some have a bit more, lets log which ones
-                print(f"Image ID {image_ID} is out of bounds for {self.obj_name} in {self.subset_mode} mode")
-                # Add to end of .txt file
-                with open(os.path.join(self.data_root, 'errors.txt'), 'a') as f:
-                    f.write(f"Image ID {image_ID} is out of bounds for {self.obj_name} in {self.subset_mode} mode\n")
+        self.gt_bboxes = dict()
+        
+        if subset_mode == 'train':
+            print("Starting to render images for model with degree: ", degree)
+            poses, camera_intrinsics = self.get_rendered_image(degree=degree)
+            print("Finished rendering images for model")
+            self.camK = camera_intrinsics[0]
+            for image_ID in range(len(poses)):
+                image_path = os.path.join(self.obj_dir, 'rgb', '{:06d}.png'.format(image_ID))
+                obj_pose = poses[image_ID]
+                self.poses.append(obj_pose)
+                self.image_paths.append(image_path)
                 
-                continue
-            image_path = os.path.join(self.obj_dir, 'rgb', '{:06d}.png'.format(image_ID))
-            pose_RT = self.poses_info[str(image_ID)][0]
-            obj_pose = np.eye(4)
-            obj_pose[:3, :3] = np.array(pose_RT['cam_R_m2c'], dtype=np.float32).reshape(3, 3)
-            obj_pose[:3, 3] = np.array(pose_RT['cam_t_m2c'], dtype=np.float32).reshape(3) * self.to_meter_scale # convert to m
+                mask_path = os.path.join(self.obj_dir, 'mask_visib', '{:06d}_000000.png'.format(image_ID))
+                self.mask_paths.append(mask_path)
 
-            self.poses.append(obj_pose)
-            self.image_paths.append(image_path)
+                allo_pose = obj_pose.copy() 
+                # TODO: This gives a division by 0 in obj_ray = trans.copy() / np.linalg.norm(trans)
+                allo_pose[:3, :3] = gs_utils.egocentric_to_allocentric(allo_pose, cam_ray=(0, 0, 1))[:3, :3]
+                self.allo_poses.append(allo_pose)
 
-            allo_pose = obj_pose.copy() 
-            allo_pose[:3, :3] = gs_utils.egocentric_to_allocentric(allo_pose)[:3, :3]
-            self.allo_poses.append(allo_pose)
+                self.image_IDs.append(image_ID)
 
-            self.image_IDs.append(image_ID)
+                if self.load_gt_bbox:
+                    # Use mask to get bbox
+                    mask = np.array(Image.open(mask_path), dtype=np.uint8)
+                    mask = mask > 0
+                    x1 = np.min(np.where(mask)[1])
+                    y1 = np.min(np.where(mask)[0])
+                    x2 = np.max(np.where(mask)[1])
+                    y2 = np.max(np.where(mask)[0])
+                    self.gt_bboxes[image_ID] = np.array([x1, y1, x2, y2])
+                else:
+                    raise NotImplementedError("Need to implement SAM bbox for YCBINEOAT")
 
-            if self.load_gt_bbox:
-                gt_x1, gt_y1, gt_bw, gt_bh = self.bboxes_info[str(image_ID)][0]['bbox_visib']
-                gt_x2 = gt_x1 + gt_bw
-                gt_y2 = gt_y1 + gt_bh
-                self.gt_bboxes[image_ID] = np.array([gt_x1, gt_y1, gt_x2, gt_y2])
+            # if self.load_yolo_det: # TODO: YOLO substitute with SAM detection
+            
+        # TODO: Test mode
+        # TODO: Add mask here
+        # self.poses_file = os.path.join(self.obj_dir, 'scene_gt.json')
+        # with open(self.poses_file, 'r') as f:
+        #     self.poses_info = json.load(f)
+
+        # if self.load_gt_bbox:
+        #     self.bboxes_file = os.path.join(self.obj_dir, 'scene_gt_info.json')
+        #     with open(self.bboxes_file, 'r') as f:
+        #         self.bboxes_info = json.load(f)
+        #     self.gt_bboxes = dict()
+
+        # image_subset_lists = gs_utils.read_list_data_from_txt(os.path.join(self.obj_dir, f'{self.subset_mode}.txt'))
+        # for idx, img_inst in enumerate(image_subset_lists):
+        #     image_ID = int(img_inst)
+        #     if image_ID >= len(self.poses_info):
+        #         # TODO: This shouldn't be happening but for some reason some have a bit more, lets log which ones
+        #         print(f"Image ID {image_ID} is out of bounds for {self.obj_name} in {self.subset_mode} mode")
+        #         # Add to end of .txt file
+        #         with open(os.path.join(self.data_root, 'errors.txt'), 'a') as f:
+        #             f.write(f"Image ID {image_ID} is out of bounds for {self.obj_name} in {self.subset_mode} mode\n")
+                
+        #         continue
+        #     image_path = os.path.join(self.obj_dir, 'rgb', '{:06d}.png'.format(image_ID))
+        #     pose_RT = self.poses_info[str(image_ID)][0]
+        #     obj_pose = np.eye(4)
+        #     obj_pose[:3, :3] = np.array(pose_RT['cam_R_m2c'], dtype=np.float32).reshape(3, 3)
+        #     obj_pose[:3, 3] = np.array(pose_RT['cam_t_m2c'], dtype=np.float32).reshape(3) * self.to_meter_scale # convert to m
+
+        #     self.poses.append(obj_pose)
+        #     self.image_paths.append(image_path)
+
+        #     allo_pose = obj_pose.copy() 
+        #     allo_pose[:3, :3] = gs_utils.egocentric_to_allocentric(allo_pose)[:3, :3]
+        #     self.allo_poses.append(allo_pose)
+
+        #     self.image_IDs.append(image_ID)
+
+        #     if self.load_gt_bbox:
+        #         gt_x1, gt_y1, gt_bw, gt_bh = self.bboxes_info[str(image_ID)][0]['bbox_visib']
+        #         gt_x2 = gt_x1 + gt_bw
+        #         gt_y2 = gt_y1 + gt_bh
+        #         self.gt_bboxes[image_ID] = np.array([gt_x1, gt_y1, gt_x2, gt_y2])
 
             # if self.load_yolo_det: # TODO: YOLO substitute with SAM detection
             #     yolo_bbox_path = os.path.join(obj_yolo_label_dir, '{:06d}.txt'.format(image_ID + 1)) # yolo_results starts from 1
@@ -499,6 +671,7 @@ class YCBInEOAT_Dataset(torch.utils.data.Dataset):
         image_ID = self.image_IDs[idx]
         allo_pose = self.allo_poses[idx]
         image_path = self.image_paths[idx]
+        mask_path = self.mask_paths[idx]
         image = np.array(Image.open(image_path), dtype=np.uint8) / 255.0
 
         data_dict['camK'] = torch.as_tensor(camK, dtype=torch.float32) 
@@ -508,27 +681,31 @@ class YCBInEOAT_Dataset(torch.utils.data.Dataset):
 
         data_dict['image_ID'] = image_ID
         data_dict['image_path'] = image_path
+        data_dict['gt_mask_path'] = mask_path
+        data_dict['coseg_mask_path'] = mask_path
 
-        if self.use_gt_mask:
-            mask_path = os.path.join(self.obj_dir, 'mask_visib', f'{image_ID:06d}_000000.png')
-            data_dict['gt_mask_path'] = mask_path
+        # TODO: Make sure this is in __init__ and not here
+        # if self.use_gt_mask:
+        #     mask_path = os.path.join(self.obj_dir, 'mask_visib', f'{image_ID:06d}_000000.png')
+        #     data_dict['gt_mask_path'] = mask_path
         
-        if self.obj_database_dir is not None:
-            data_dict['coseg_mask_path'] = os.path.join(self.obj_database_dir, 'pred_coseg_mask', '{:06d}.png'.format(image_ID))
+        # if self.obj_database_dir is not None:
+        #     data_dict['coseg_mask_path'] = os.path.join(self.obj_database_dir, 'pred_coseg_mask', '{:06d}.png'.format(image_ID))
 
-        if self.load_yolo_det and self.yolo_bboxes.get(image_ID, None) is not None:
-            img_hei, img_wid = image.shape[:2]
-            x0_n, y0_n, x1_n, y1_n = self.yolo_bboxes[image_ID]
-            x0_n, x1_n = x0_n * img_wid, x1_n * img_wid
-            y0_n, y1_n = y0_n * img_hei, y1_n * img_hei
+        # TODO: YOLO substitute with SAM detection
+        # if self.load_yolo_det and self.yolo_bboxes.get(image_ID, None) is not None:
+        #     img_hei, img_wid = image.shape[:2]
+        #     x0_n, y0_n, x1_n, y1_n = self.yolo_bboxes[image_ID]
+        #     x0_n, x1_n = x0_n * img_wid, x1_n * img_wid
+        #     y0_n, y1_n = y0_n * img_hei, y1_n * img_hei
             
-            bbox_xyxy = np.array([x0_n, y0_n, x1_n, y1_n])
-            data_dict['yolo_bbox'] = torch.as_tensor(bbox_xyxy, dtype=torch.float32)
+        #     bbox_xyxy = np.array([x0_n, y0_n, x1_n, y1_n])
+        #     data_dict['yolo_bbox'] = torch.as_tensor(bbox_xyxy, dtype=torch.float32)
 
-            bbox_scale = max(x1_n - x0_n, y1_n - y0_n)
-            bbox_center = np.array([(x0_n + x1_n) / 2, (y0_n + y1_n) / 2])
-            data_dict['bbox_scale'] = torch.as_tensor(bbox_scale, dtype=torch.float32)
-            data_dict['bbox_center'] = torch.as_tensor(bbox_center, dtype=torch.float32)
+        #     bbox_scale = max(x1_n - x0_n, y1_n - y0_n)
+        #     bbox_center = np.array([(x0_n + x1_n) / 2, (y0_n + y1_n) / 2])
+        #     data_dict['bbox_scale'] = torch.as_tensor(bbox_scale, dtype=torch.float32)
+        #     data_dict['bbox_center'] = torch.as_tensor(bbox_center, dtype=torch.float32)
             
         if self.load_gt_bbox:
             x1, y1, x2, y2 = self.gt_bboxes[image_ID]

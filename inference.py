@@ -55,7 +55,8 @@ model_net.load_state_dict(ckpt_weight)
 print('Pretrained weights are loaded from ', ckpt_file.split('/')[-1])
 model_net.eval()
 
-def create_reference_database_from_RGB_images(model_func, obj_dataset, device, save_pred_mask=False):    
+def create_reference_database_from_RGB_images(model_func, obj_dataset, device, save_pred_mask=False):
+    use_gt_mask = obj_dataset.use_gt_mask if hasattr(obj_dataset, 'use_gt_mask') else False    
     if CFG.USE_ALLOCENTRIC:
         obj_poses = np.stack(obj_dataset.allo_poses, axis=0)
     else:
@@ -69,6 +70,7 @@ def create_reference_database_from_RGB_images(model_func, obj_dataset, device, s
     ref_fps_images = list()
     ref_fps_poses = list()
     ref_fps_camKs = list()
+    ref_fps_gt_masks = list()
     for ref_idx in fps_inds:
         view_idx = ref_idx.item()
         datum = obj_dataset[view_idx]
@@ -81,17 +83,40 @@ def create_reference_database_from_RGB_images(model_func, obj_dataset, device, s
     ref_fps_poses = torch.stack(ref_fps_poses, dim=0)
     ref_fps_camKs = torch.stack(ref_fps_camKs, dim=0)
     ref_fps_images = torch.stack(ref_fps_images, dim=0)
-    zoom_fps_images = gs_utils.zoom_in_and_crop_with_offset(image=ref_fps_images, # KxHxWx3 -> KxSxSx3
+    zoom_fps_outp = gs_utils.zoom_in_and_crop_with_offset(image=ref_fps_images, # KxHxWx3 -> KxSxSx3
                                                                 K=ref_fps_camKs, 
                                                                 t=ref_fps_poses[:, :3, 3], 
                                                                 radius=obj_dataset.bbox3d_diameter/2,
                                                                 target_size=CFG.zoom_image_scale, 
-                                                                margin=CFG.zoom_image_margin)['zoom_image']
+                                                                margin=CFG.zoom_image_margin)
+    zoom_fps_images = zoom_fps_outp['zoom_image'] # KxSxSx3
+    
+    if use_gt_mask:
+        for ref_idx in fps_inds:
+            view_idx = ref_idx.item()
+            datum = obj_dataset[view_idx]
+            gt_mask = cv2.imread(datum['gt_mask_path'], cv2.IMREAD_GRAYSCALE)
+            gt_mask = torch.from_numpy(gt_mask).float() / 255.0
+            zoom_gt_mask = gs_utils.zoom_in_and_crop_with_offset(image=gt_mask.unsqueeze(0).unsqueeze(-1),
+                                                                 K=ref_fps_camKs[view_idx],
+                                                                 t=ref_fps_poses[view_idx, :3, 3],
+                                                                 radius=obj_dataset.bbox3d_diameter/2,
+                                                                 target_size=CFG.zoom_image_scale,
+                                                                 margin=CFG.zoom_image_margin)['zoom_image']
+            ref_fps_gt_masks.append(zoom_gt_mask.squeeze(-1))
+        ref_fps_gt_masks = torch.stack(ref_fps_gt_masks, dim=0)
+    
     with torch.no_grad():
         if zoom_fps_images.shape[-1] == 3:
             zoom_fps_images = zoom_fps_images.permute(0, 3, 1, 2)
         obj_fps_feats, _, obj_fps_dino_tokens = model_func.extract_DINOv2_feature(zoom_fps_images.to(device), return_last_dino_feat=True) # Kx768x16x16
-        obj_fps_masks = model_func.refer_cosegmentation(obj_fps_feats).sigmoid() # Kx1xSxS
+        
+        # TODO: I'm pretty sure this is wrong. We should bo zooming in on ref_fps_gt_masks using the same method as zoom_fps_images
+        # Above we should check which pixels are in the zoomed section and then use that to create the mask
+        if use_gt_mask:
+            obj_fps_masks = ref_fps_gt_masks.unsqueeze(1)
+        else:
+            obj_fps_masks = model_func.refer_cosegmentation(obj_fps_feats).sigmoid() # Kx1xSxS
 
         obj_token_masks = torch_F.interpolate(obj_fps_masks,
                                              scale_factor=1.0/model_func.dino_patch_size, 
@@ -121,9 +146,20 @@ def create_reference_database_from_RGB_images(model_func, obj_dataset, device, s
             if zoom_image.shape[-1] == 3:
                 zoom_image = zoom_image.permute(0, 3, 1, 2)
             zoom_feat = model_func.extract_DINOv2_feature(zoom_image.to(device))
-            zoom_mask = model_func.query_cosegmentation(zoom_feat, 
-                                                        x_ref=obj_fps_feats, 
-                                                        ref_mask=obj_fps_masks).sigmoid()
+            # TODO: Same story here, we should be zooming in on the mask using the same method as zoom_image
+            if use_gt_mask:
+                gt_mask = cv2.imread(ref_data['gt_mask_path'], cv2.IMREAD_GRAYSCALE)
+                gt_mask = torch.from_numpy(gt_mask).float() / 255.0
+                zoom_mask = gs_utils.zoom_in_and_crop_with_offset(image=gt_mask.unsqueeze(0).unsqueeze(-1),
+                                                                  K=camK,
+                                                                  t=pose[:3, 3],
+                                                                  radius=obj_dataset.bbox3d_diameter/2,
+                                                                  target_size=CFG.zoom_image_scale,
+                                                                  margin=CFG.zoom_image_margin)['zoom_image'].squeeze(-1)
+            else:
+                zoom_mask = model_func.query_cosegmentation(zoom_feat, 
+                                                            x_ref=obj_fps_feats, 
+                                                            ref_mask=obj_fps_masks).sigmoid()
             y_Remb = model_func.generate_rotation_aware_embedding(zoom_feat, zoom_mask)
             refer_Remb_vectors.append(y_Remb.squeeze(0)) # 64
             try:

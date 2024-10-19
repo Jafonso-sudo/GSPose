@@ -67,6 +67,7 @@ def create_reference_database_from_RGB_images(model_func, obj_dataset, device, s
     obj_vecRs = obj_matRs[:, 2, :3]
     fps_inds = py3d_ops.sample_farthest_points(
         obj_vecRs[None, :, :], K=CFG.refer_view_num, random_start_point=False)[1].squeeze(0)  # obtain the FPS indices
+    print("FPS indices: ", fps_inds)
     ref_fps_images = list()
     ref_fps_poses = list()
     ref_fps_camKs = list()
@@ -80,6 +81,10 @@ def create_reference_database_from_RGB_images(model_func, obj_dataset, device, s
         ref_fps_images.append(image)
         ref_fps_poses.append(pose)
         ref_fps_camKs.append(camK)
+        if use_gt_mask:
+            gt_mask = cv2.imread(datum['gt_mask_path'], cv2.IMREAD_GRAYSCALE)
+            gt_mask = torch.from_numpy(gt_mask).float() / 255.0
+            ref_fps_gt_masks.append(gt_mask)
     ref_fps_poses = torch.stack(ref_fps_poses, dim=0)
     ref_fps_camKs = torch.stack(ref_fps_camKs, dim=0)
     ref_fps_images = torch.stack(ref_fps_images, dim=0)
@@ -92,19 +97,26 @@ def create_reference_database_from_RGB_images(model_func, obj_dataset, device, s
     zoom_fps_images = zoom_fps_outp['zoom_image'] # KxSxSx3
     
     if use_gt_mask:
-        for ref_idx in fps_inds:
-            view_idx = ref_idx.item()
-            datum = obj_dataset[view_idx]
-            gt_mask = cv2.imread(datum['gt_mask_path'], cv2.IMREAD_GRAYSCALE)
-            gt_mask = torch.from_numpy(gt_mask).float() / 255.0
-            zoom_gt_mask = gs_utils.zoom_in_and_crop_with_offset(image=gt_mask.unsqueeze(0).unsqueeze(-1),
-                                                                 K=ref_fps_camKs[view_idx],
-                                                                 t=ref_fps_poses[view_idx, :3, 3],
-                                                                 radius=obj_dataset.bbox3d_diameter/2,
-                                                                 target_size=CFG.zoom_image_scale,
-                                                                 margin=CFG.zoom_image_margin)['zoom_image']
-            ref_fps_gt_masks.append(zoom_gt_mask.squeeze(-1))
-        ref_fps_gt_masks = torch.stack(ref_fps_gt_masks, dim=0)
+        ref_fps_gt_masks = torch.stack(ref_fps_gt_masks, dim=0).unsqueeze(-1)
+        zoom_gt_mask = gs_utils.zoom_in_and_crop_with_offset(image=ref_fps_gt_masks, # KxHxWx1 -> KxSxS
+                                                            K=ref_fps_camKs,
+                                                            t=ref_fps_poses[:, :3, 3],
+                                                            radius=obj_dataset.bbox3d_diameter/2,
+                                                            target_size=CFG.zoom_image_scale,
+                                                            margin=CFG.zoom_image_margin)['zoom_image']
+        ref_fps_gt_masks = zoom_gt_mask
+        # for ref_idx in fps_inds:
+        #     view_idx = ref_idx.item()
+        #     datum = obj_dataset[view_idx]
+        #     gt_mask = cv2.imread(datum['gt_mask_path'], cv2.IMREAD_GRAYSCALE)
+        #     gt_mask = torch.from_numpy(gt_mask).float() / 255.0
+        #     zoom_gt_mask = gs_utils.zoom_in_and_crop_with_offset(image=gt_mask.unsqueeze(0).unsqueeze(-1),
+        #                                                          K=ref_fps_camKs[view_idx],
+        #                                                          t=ref_fps_poses[view_idx, :3, 3],
+        #                                                          radius=obj_dataset.bbox3d_diameter/2,
+        #                                                          target_size=CFG.zoom_image_scale,
+        #                                                          margin=CFG.zoom_image_margin)['zoom_image']
+        #     ref_fps_gt_masks.append(zoom_gt_mask.squeeze(-1))
     
     with torch.no_grad():
         if zoom_fps_images.shape[-1] == 3:
@@ -114,7 +126,7 @@ def create_reference_database_from_RGB_images(model_func, obj_dataset, device, s
         # TODO: I'm pretty sure this is wrong. We should bo zooming in on ref_fps_gt_masks using the same method as zoom_fps_images
         # Above we should check which pixels are in the zoomed section and then use that to create the mask
         if use_gt_mask:
-            obj_fps_masks = ref_fps_gt_masks.unsqueeze(1)
+            obj_fps_masks = ref_fps_gt_masks.permute(0, 3, 1, 2).to(device) # Kx1xSxS
         else:
             obj_fps_masks = model_func.refer_cosegmentation(obj_fps_feats).sigmoid() # Kx1xSxS
 
@@ -155,7 +167,7 @@ def create_reference_database_from_RGB_images(model_func, obj_dataset, device, s
                                                                   t=pose[:3, 3],
                                                                   radius=obj_dataset.bbox3d_diameter/2,
                                                                   target_size=CFG.zoom_image_scale,
-                                                                  margin=CFG.zoom_image_margin)['zoom_image'].squeeze(-1)
+                                                                  margin=CFG.zoom_image_margin)['zoom_image'].permute(0, 3, 1, 2).to(device)
             else:
                 zoom_mask = model_func.query_cosegmentation(zoom_feat, 
                                                             x_ref=obj_fps_feats, 
@@ -898,6 +910,26 @@ def eval_GSPose(model_func, obj_dataset, ref_database_dir, output_pose_dir=None,
     
     log_file_f.close()
     return {'init': init_results, 'refine': refine_results}
+
+def render_Gaussian_object_model_and_get_radii(obj_gaussians, camK, pose, img_hei, img_wid, device):
+    if isinstance(pose, torch.Tensor):
+        pose = pose.numpy()
+    obj_gaussians.initialize_pose()
+    FovX = focal2fov(camK[0, 0], img_wid)
+    FovY = focal2fov(camK[1, 1], img_hei)
+    target_image = torch.zeros((3, img_hei, img_wid)).to(device)
+    gs_camera = GS_Camera(T=pose[:3, 3],
+                          R=pose[:3, :3].T, 
+                          FoVx=FovX, FoVy=FovY,
+                          cx_offset=0, cy_offset=0,
+                          image=target_image, colmap_id=0, uid=0, image_name='', 
+                          gt_alpha_mask=None, data_device=device)    
+    render_info = GS_Renderer(gs_camera, obj_gaussians, gaussian_PipeP, gaussian_BG)
+    render_img = render_info['render']
+    render_img_np = render_img.permute(1, 2, 0).detach().cpu().numpy()
+    render_img_np = (render_img_np * 255).astype(np.uint8)
+    render_info['image'] = render_img_np
+    return render_info
 
 def render_Gaussian_object_model(obj_gaussians, camK, pose, img_hei, img_wid, device): 
     if isinstance(pose, torch.Tensor):

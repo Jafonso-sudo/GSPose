@@ -24,6 +24,7 @@ from inference import (
     multiple_initial_pose_inference,
     perform_segmentation_and_encoding,
     render_Gaussian_object_model,
+    render_Gaussian_object_model_and_get_radii,
 )
 from model.network import model_arch as ModelNet
 
@@ -302,7 +303,7 @@ def perform_pose_estimation(
     return track_outputs, images, camKs
 
 
-def render_gaussian_model(
+def render_gaussian_model_with_info(
     gaussian_object: GaussianModel,
     camK: np.ndarray,
     H,
@@ -322,6 +323,18 @@ def render_gaussian_model(
     pose[:3, :3] = R
     pose[:3, 3] = T
 
-    return render_Gaussian_object_model(
+    return render_Gaussian_object_model_and_get_radii(
         gaussian_object, camK, pose, H, W, device=device
     )
+
+
+def render_gaussian_model(
+    gaussian_object: GaussianModel,
+    camK: np.ndarray,
+    H,
+    W,
+    R: Optional[np.ndarray] = None,
+    T: Optional[np.ndarray] = None,
+    device: Optional[torch.device] = None,
+):
+    return render_gaussian_model_with_info(gaussian_object, camK, H, W, R, T, device)['image']

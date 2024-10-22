@@ -57,7 +57,7 @@ class ModelParams(ParamGroup):
 
         self.margin = 0.0
         self.zoom_scale = 512
-        self.num_points = 4096
+        self.num_points = 16384
         self.random_points3D = False
         self.referloader = None
         self.queryloader = None

@@ -13,6 +13,7 @@ from torch.utils.data import Dataset
 
 from config import inference_cfg as CFG
 from dataset.demo_dataset import OnePoseCap_Dataset
+from dataset.inference_datasets import YCBInEOAT_Dataset
 from gaussian_object.gaussian_model import GaussianModel
 from inference import (
     GS_Tracker,
@@ -100,23 +101,24 @@ def create_or_load_gaussian_splat_from_images(
         obj_database_dir = os.path.join(
             demo_data_dir, f"{obj_name}-database"
         )  # object database directory
-        obj_database_path = os.path.join(
-            obj_database_dir, "reference_database.pkl"
-        )  # object database file path
         obj_refer_dataset = OnePoseCap_Dataset(
             obj_data_dir=refer_seq_dir,
             obj_database_dir=obj_database_dir,
             use_binarized_mask=CFG.BINARIZE_MASK,
         )
-    else:
+    elif isinstance(obj_refer_dataset, OnePoseCap_Dataset):
+        obj_database_dir: str = obj_refer_dataset.obj_database_dir # type: ignore
+        obj_name = obj_refer_dataset.obj_name
+    elif isinstance(obj_refer_dataset, YCBInEOAT_Dataset):
         obj_dir = obj_refer_dataset.obj_dir
         obj_name = obj_refer_dataset.obj_name
         obj_database_dir = os.path.join(
             demo_data_dir, f"{obj_dir}-database"
         )
-        obj_database_path = os.path.join(
-            obj_database_dir, "reference_database.pkl"
-        )
+    else:
+        raise ValueError("obj_refer_dataset must be an instance of OnePoseCap_Dataset or YCBInEOAT_Dataset")
+    
+    obj_database_path = os.path.join(obj_database_dir, "reference_database.pkl")
 
     if not os.path.exists(obj_database_path):
         print(f"Generate object reference database for {obj_name} ...")
@@ -139,7 +141,7 @@ def create_or_load_gaussian_splat_from_images(
         gaussian_OptimP = OptimizationParams(parser)
         # gaussian_BG = torch.zeros((3), device=device)
 
-        if "ipykernel_launcher.py" in sys.argv[0]:
+        if "ipykernel_launcher.py" in sys.argv[0] or "create_object.py" in sys.argv[0]:
             args = parser.parse_args(sys.argv[3:])  # if run in ipython notebook
         else:
             args = parser.parse_args()  # if run in terminal

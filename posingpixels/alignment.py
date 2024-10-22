@@ -45,7 +45,7 @@ class PixelToGaussianAligner:
         pixeltracker_upscale : float, optional
             Factor to upscale the pixeltracker coordinates, by default 1.0.
         """
-        self.mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE) > 0
+        self.mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE) > 0.5
         self.H, self.W = self.mask.shape
         self.tracks = pixeltracker_upscale * np.load(pixeltracker_path)[:, :, :2]
         self.init_T, self.init_R, self.init_K = initial_T, initial_R, initial_cam_K

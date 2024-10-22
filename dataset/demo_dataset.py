@@ -9,18 +9,20 @@ from transforms3d import affines, quaternions
 from misc_utils import gs_utils
 
 class OnePoseCap_Dataset(torch.utils.data.Dataset):
-    def __init__(self, obj_data_dir, num_grid_points=4096, extract_RGB=False, use_binarized_mask=False, obj_database_dir=None):
-        
+    def __init__(self, obj_data_dir, num_grid_points=4096, extract_RGB=False, use_binarized_mask=False, obj_database_dir=None, use_sam2=True):
+        self.obj_name = os.path.basename(obj_data_dir).split('-')[0]
         self.extract_RGB = extract_RGB
         self.obj_data_dir = obj_data_dir
         self.num_grid_points = num_grid_points
         self.obj_database_dir = obj_database_dir
         self.use_binarized_mask = use_binarized_mask
+        self.use_sam2 = use_sam2
         
         self.arkit_box_path = os.path.join(self.obj_data_dir, 'Box.txt')
         self.arkit_pose_path = os.path.join(self.obj_data_dir, 'ARposes.txt')
         self.arkit_video_path = os.path.join(self.obj_data_dir, 'Frames.m4v')
         self.arkit_intrin_path = os.path.join(self.obj_data_dir, 'Frames.txt')
+        self.sam2_mask_dir = os.path.join(self.obj_data_dir, 'masks')
         
         #### read the ARKit pose info
         with open(self.arkit_pose_path, 'r') as pf:
@@ -132,7 +134,10 @@ class OnePoseCap_Dataset(torch.utils.data.Dataset):
         data_dict['camK'] = torch.as_tensor(camK, dtype=torch.float32) 
         data_dict['pose'] = torch.as_tensor(pose, dtype=torch.float32)
         data_dict['image'] = torch.as_tensor(image, dtype=torch.float32) 
-        data_dict['allo_pose'] = torch.as_tensor(allo_pose, dtype=torch.float32)   
+        data_dict['allo_pose'] = torch.as_tensor(allo_pose, dtype=torch.float32)
+        
+        if self.use_sam2:
+            data_dict['sam2_mask_path'] = os.path.join(self.sam2_mask_dir, f'{image_ID}.png')   
         
         if self.obj_database_dir is not None:
             data_dict['coseg_mask_path'] = os.path.join(self.obj_database_dir, 'pred_coseg_mask', '{:06d}.png'.format(image_ID))

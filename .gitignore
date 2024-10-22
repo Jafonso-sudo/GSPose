@@ -173,3 +173,5 @@ notebook/*.json
 dataspace
 
 .vscode
+*.pkl
+data/*

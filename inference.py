@@ -56,7 +56,11 @@ print('Pretrained weights are loaded from ', ckpt_file.split('/')[-1])
 model_net.eval()
 
 def create_reference_database_from_RGB_images(model_func, obj_dataset, device, save_pred_mask=False):
-    use_gt_mask = obj_dataset.use_gt_mask if hasattr(obj_dataset, 'use_gt_mask') else False    
+    use_sam2_mask = obj_dataset.use_sam2 if hasattr(obj_dataset, 'use_sam2') else False
+    use_gt_mask = obj_dataset.use_gt_mask if hasattr(obj_dataset, 'use_gt_mask') else False   
+    use_precomputed_mask = use_sam2_mask or use_gt_mask
+    if use_precomputed_mask:
+        mask_key = 'gt_mask_path' if use_gt_mask else 'sam2_mask_path'
     if CFG.USE_ALLOCENTRIC:
         obj_poses = np.stack(obj_dataset.allo_poses, axis=0)
     else:
@@ -81,8 +85,8 @@ def create_reference_database_from_RGB_images(model_func, obj_dataset, device, s
         ref_fps_images.append(image)
         ref_fps_poses.append(pose)
         ref_fps_camKs.append(camK)
-        if use_gt_mask:
-            gt_mask = cv2.imread(datum['gt_mask_path'], cv2.IMREAD_GRAYSCALE)
+        if use_precomputed_mask:
+            gt_mask = cv2.imread(datum[mask_key], cv2.IMREAD_GRAYSCALE)
             gt_mask = torch.from_numpy(gt_mask).float() / 255.0
             ref_fps_gt_masks.append(gt_mask)
     ref_fps_poses = torch.stack(ref_fps_poses, dim=0)
@@ -96,7 +100,7 @@ def create_reference_database_from_RGB_images(model_func, obj_dataset, device, s
                                                                 margin=CFG.zoom_image_margin)
     zoom_fps_images = zoom_fps_outp['zoom_image'] # KxSxSx3
     
-    if use_gt_mask:
+    if use_precomputed_mask:
         ref_fps_gt_masks = torch.stack(ref_fps_gt_masks, dim=0).unsqueeze(-1)
         zoom_gt_mask = gs_utils.zoom_in_and_crop_with_offset(image=ref_fps_gt_masks, # KxHxWx1 -> KxSxS
                                                             K=ref_fps_camKs,
@@ -108,7 +112,7 @@ def create_reference_database_from_RGB_images(model_func, obj_dataset, device, s
         # for ref_idx in fps_inds:
         #     view_idx = ref_idx.item()
         #     datum = obj_dataset[view_idx]
-        #     gt_mask = cv2.imread(datum['gt_mask_path'], cv2.IMREAD_GRAYSCALE)
+        #     gt_mask = cv2.imread(datum[mask_key], cv2.IMREAD_GRAYSCALE)
         #     gt_mask = torch.from_numpy(gt_mask).float() / 255.0
         #     zoom_gt_mask = gs_utils.zoom_in_and_crop_with_offset(image=gt_mask.unsqueeze(0).unsqueeze(-1),
         #                                                          K=ref_fps_camKs[view_idx],
@@ -125,7 +129,7 @@ def create_reference_database_from_RGB_images(model_func, obj_dataset, device, s
         
         # TODO: I'm pretty sure this is wrong. We should bo zooming in on ref_fps_gt_masks using the same method as zoom_fps_images
         # Above we should check which pixels are in the zoomed section and then use that to create the mask
-        if use_gt_mask:
+        if use_precomputed_mask:
             obj_fps_masks = ref_fps_gt_masks.permute(0, 3, 1, 2).to(device) # Kx1xSxS
         else:
             obj_fps_masks = model_func.refer_cosegmentation(obj_fps_feats).sigmoid() # Kx1xSxS
@@ -159,8 +163,8 @@ def create_reference_database_from_RGB_images(model_func, obj_dataset, device, s
                 zoom_image = zoom_image.permute(0, 3, 1, 2)
             zoom_feat = model_func.extract_DINOv2_feature(zoom_image.to(device))
             # TODO: Same story here, we should be zooming in on the mask using the same method as zoom_image
-            if use_gt_mask:
-                gt_mask = cv2.imread(ref_data['gt_mask_path'], cv2.IMREAD_GRAYSCALE)
+            if use_precomputed_mask:
+                gt_mask = cv2.imread(ref_data[mask_key], cv2.IMREAD_GRAYSCALE)
                 gt_mask = torch.from_numpy(gt_mask).float() / 255.0
                 zoom_mask = gs_utils.zoom_in_and_crop_with_offset(image=gt_mask.unsqueeze(0).unsqueeze(-1),
                                                                   K=camK,
@@ -187,12 +191,13 @@ def create_reference_database_from_RGB_images(model_func, obj_dataset, device, s
             refer_coseg_mask_info.append(torch.tensor([msk_cx, msk_cy, ref_tz, bin_mask_area, prob_mask_area]))
 
         if save_pred_mask:
+            # TODO: This zoom_out_and_uncrop is lossy, so just use directly the existing mask if it exists
             orig_mask = gs_utils.zoom_out_and_uncrop_image(zoom_mask.squeeze(), # SxS
                                                             bbox_center=zoom_outp['bbox_center'],
                                                             bbox_scale=zoom_outp['bbox_scale'],
                                                             orig_hei=image.shape[0],
                                                             orig_wid=image.shape[1],
-                                                            )# 1xHxWx1
+                                                            )# 1xHxWx1 (0~1)
             coseg_mask_path = ref_data['coseg_mask_path']
             orig_mask = (orig_mask.detach().cpu().squeeze() * 255).numpy().astype(np.uint8) # HxW
             if not os.path.exists(os.path.dirname(coseg_mask_path)):

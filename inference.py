@@ -127,8 +127,6 @@ def create_reference_database_from_RGB_images(model_func, obj_dataset, device, s
             zoom_fps_images = zoom_fps_images.permute(0, 3, 1, 2)
         obj_fps_feats, _, obj_fps_dino_tokens = model_func.extract_DINOv2_feature(zoom_fps_images.to(device), return_last_dino_feat=True) # Kx768x16x16
         
-        # TODO: I'm pretty sure this is wrong. We should bo zooming in on ref_fps_gt_masks using the same method as zoom_fps_images
-        # Above we should check which pixels are in the zoomed section and then use that to create the mask
         if use_precomputed_mask:
             obj_fps_masks = ref_fps_gt_masks.permute(0, 3, 1, 2).to(device) # Kx1xSxS
         else:
@@ -162,7 +160,6 @@ def create_reference_database_from_RGB_images(model_func, obj_dataset, device, s
             if zoom_image.shape[-1] == 3:
                 zoom_image = zoom_image.permute(0, 3, 1, 2)
             zoom_feat = model_func.extract_DINOv2_feature(zoom_image.to(device))
-            # TODO: Same story here, we should be zooming in on the mask using the same method as zoom_image
             if use_precomputed_mask:
                 gt_mask = cv2.imread(ref_data[mask_key], cv2.IMREAD_GRAYSCALE)
                 gt_mask = torch.from_numpy(gt_mask).float() / 255.0
@@ -191,13 +188,16 @@ def create_reference_database_from_RGB_images(model_func, obj_dataset, device, s
             refer_coseg_mask_info.append(torch.tensor([msk_cx, msk_cy, ref_tz, bin_mask_area, prob_mask_area]))
 
         if save_pred_mask:
-            # TODO: This zoom_out_and_uncrop is lossy, so just use directly the existing mask if it exists
-            orig_mask = gs_utils.zoom_out_and_uncrop_image(zoom_mask.squeeze(), # SxS
-                                                            bbox_center=zoom_outp['bbox_center'],
-                                                            bbox_scale=zoom_outp['bbox_scale'],
-                                                            orig_hei=image.shape[0],
-                                                            orig_wid=image.shape[1],
-                                                            )# 1xHxWx1 (0~1)
+            # This zoom_out_and_uncrop is lossy, so just use directly the existing mask if it exists
+            if not use_precomputed_mask:
+                orig_mask = gs_utils.zoom_out_and_uncrop_image(zoom_mask.squeeze(), # SxS
+                                                                bbox_center=zoom_outp['bbox_center'],
+                                                                bbox_scale=zoom_outp['bbox_scale'],
+                                                                orig_hei=image.shape[0],
+                                                                orig_wid=image.shape[1],
+                                                                )# 1xHxWx1 (0~1)
+            else:
+                orig_mask = gt_mask
             coseg_mask_path = ref_data['coseg_mask_path']
             orig_mask = (orig_mask.detach().cpu().squeeze() * 255).numpy().astype(np.uint8) # HxW
             if not os.path.exists(os.path.dirname(coseg_mask_path)):

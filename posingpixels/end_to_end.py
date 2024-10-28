@@ -5,7 +5,7 @@ import os
 OBJECT_NAME = "lion"
 INPUT_NAME = "demo_lion"
 SPATRACKER_DOWNSAMPLE = 0.5
-SPATRACKER_GRID_SIZE = 20
+SPATRACKER_GRID_SIZE = 0
 
 file_dir = os.path.dirname(os.path.realpath(__file__))
 proj_root = os.path.abspath(os.path.join(file_dir, os.pardir))
@@ -107,7 +107,7 @@ if len(os.listdir(f"{input_video_dir}/tracks")) < 4:
 source $(conda info --base)/etc/profile.d/conda.sh && \
 conda activate SpaTrack && \
 cd {spatracker_dir} && \
-python posingpixels.py --downsample {SPATRACKER_DOWNSAMPLE} --grid_size {SPATRACKER_GRID_SIZE} --vid_path {input_video_path} --mask_path {input_video_dir}/masks/0.png --outdir {input_video_dir}/tracks && \
+python posingpixels.py --downsample {SPATRACKER_DOWNSAMPLE} --grid_size {SPATRACKER_GRID_SIZE} --vid_path {input_video_path} --mask_path {input_video_dir}/masks/0.png --query_points {input_video_dir}/queries.npy --outdir {input_video_dir}/tracks && \
 cd {proj_root} && \
 conda deactivate
 """.strip()

@@ -184,6 +184,7 @@ def readObjectInfo(train_dataset, test_dataset, model_path, num_points=4096, zoo
 
     nerf_normalization = getNerfppNorm(train_cam_infos)
     ply_path = os.path.join(model_path, "3DGS_points3d.ply")
+    # TODO: This is where we introduce a prior for the 3D points
     if not random_points3D:
         obj_bbox3D = train_dataset.obj_bbox3d
         # obj_bbox3D = np.loadtxt(os.path.join(path, 'corners.txt'))

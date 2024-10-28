@@ -10,7 +10,7 @@
 #
 import math
 import torch
-from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
+from diff_gauss import GaussianRasterizationSettings, GaussianRasterizer
 
 from gaussian_object.utils.sh_utils import eval_sh
 from gaussian_object.gaussian_model import GaussianModel
@@ -83,7 +83,7 @@ def render(viewpoint_camera: GS_Camera, pc : GaussianModel, pipe, bg_color : tor
         colors_precomp = override_color
 
     # Rasterize visible Gaussians to image, obtain their radii (on screen). 
-    rendered_image, radii = rasterizer(
+    rendered_image, rendered_depth, rendered_norm, rendered_alpha, radii, extra = rasterizer(
         means3D = means3D,
         means2D = means2D,
         shs = shs,
@@ -91,11 +91,14 @@ def render(viewpoint_camera: GS_Camera, pc : GaussianModel, pipe, bg_color : tor
         opacities = opacity,
         scales = scales,
         rotations = rotations,
-        cov3D_precomp = cov3D_precomp)
+        cov3Ds_precomp = cov3D_precomp)
 
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.
     return {"render": rendered_image,
+            "depth": rendered_depth,
+            "normals": rendered_norm,
+            "alpha": rendered_alpha,
             "viewspace_points": screenspace_points,
             "visibility_filter" : radii > 0,
             "radii": radii}

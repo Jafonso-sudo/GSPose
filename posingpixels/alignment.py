@@ -6,6 +6,7 @@ from gaussian_object.gaussian_model import GaussianModel
 from posingpixels.utils.geometry import (
     pixel_to_ray_dir,
     ray_splat_intersection,
+    reverse_pose_to_points,
     revert_pose_to_ray,
 )
 
@@ -95,3 +96,59 @@ class PixelToGaussianAligner:
         filtered_tracks = np.delete(self.tracks, filtered_idx, axis=1)
 
         return intersections, filtered_tracks
+
+class DepthInformedPixelToGaussianAligner:
+    """
+    A class to align pixel coordinates to a Gaussian splat based on predicted depth map.
+    """
+
+    def __init__(
+        self,
+        T: np.ndarray,
+        R: np.ndarray,
+        K: np.ndarray,
+        depth_map: np.ndarray,
+    ):
+        """
+        Initialize the PixelToGaussianAligner with a mask and tracked points.
+
+        Parameters
+        ----------
+        mask_path : str
+            Path to the segmentation mask of the object for the first frame.
+        pixeltracker_path : str
+            Path to the .npy file containing the tracked points.
+        pixeltracker_upscale : float, optional
+            Factor to upscale the pixeltracker coordinates, by default 1.0.
+        """
+        self.T, self.R, self.K = T, R, K
+        self.depth_map = depth_map
+
+    def align(self, points: np.ndarray) -> np.ndarray:
+        """
+        Align the tracked points to the Gaussian object.
+        
+        Parameters
+        ----------
+        points : np.ndarray
+            A 2D array of shape (n_points, 2) containing the pixel coordinates of the tracked points.
+
+        Returns
+        -------
+        np.ndarray
+            A 2D array of shape (n_points, 3) containing the intersections of the points with the Gaussian object.
+        """
+        intersections = []
+        for p in points:
+            pixel_ray_dir = pixel_to_ray_dir(p, self.K)
+            ray_origin, ray_direction = revert_pose_to_ray(
+                np.zeros(3), pixel_ray_dir, self.R, self.T
+            )
+            depth = self.depth_map[p[1], p[0]]
+            t = depth / pixel_ray_dir[2]
+            point_3d = ray_origin + t * ray_direction
+            intersections.append(point_3d)
+        intersections = np.array(intersections)
+        # intersection_identity = reverse_pose_to_points(intersections, self.R, self.T)
+
+        return intersections

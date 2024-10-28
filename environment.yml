@@ -1,4 +1,4 @@
-name: gspose
+name: gspose-copy
 channels:
   - pytorch
   - conda-forge
@@ -7,8 +7,9 @@ channels:
 dependencies:
   - python==3.8.5
   - plyfile==0.8.1
-  - cudatoolkit==11.7
-  # - cudatoolkit-dev  # Replaced cudatoolkit with cudatoolkit-dev
+  # - cudatoolkit==11.7
+  - cudatoolkit-dev==11.7  # Replaced cudatoolkit with cudatoolkit-dev to get nvcc
+  # Note: I think for versions >11.7 you need to use the new NVIDIA method they explain in documentation (if you want nvcc)
   - pip:
     - mmcv==1.7.1
     - tqdm==4.66.2
@@ -25,3 +26,4 @@ dependencies:
     - scikit-image==0.19.3
     - opencv-python==4.8.0.76
     - pytorch-msssim==1.0.0
+    - ipykernel==6.29.5 

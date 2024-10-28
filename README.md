@@ -23,7 +23,7 @@ git clone git@github.com:dingdingcai/GSPose.git --recursive
 cd GSPose
 conda env create -f environment.yml
 conda activate gspose
-
+chmod +x post-link.sh # Enables permissions for script that will set your $CUDA_HOME to $CONDA_PREFIX
 bash install_env.sh
 ```
 

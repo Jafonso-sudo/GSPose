@@ -96,6 +96,7 @@ def get_gaussian_splat_pointcloud(
     Pointclouds
         The point cloud.
     """
+    gaussian_object.initialize_pose()  # IMPORTANT: Otherwise the object will be rendered with the previous pose applied
     if not pose:
         pose = np.eye(4)
 

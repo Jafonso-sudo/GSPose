@@ -17,6 +17,7 @@ import torch
 from tqdm import tqdm
 from random import randint
 from argparse import ArgumentParser, Namespace
+from PIL import Image
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
@@ -108,6 +109,8 @@ def create_3D_Gaussian_object(dataset, opt, pipe, testing_iterations=[30_000],
         
         # Ll1 = l1_loss(image, gt_image)
         # loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+        # TODO: Introduce alpha in the loss function. How? The alpha should be similar to the mask in the image
+        # i.e. where there is the object, the alpha should be 1, and where there is no object, the alpha should be 0.
 
         Ll1 = (l1_loss(image, gt_image, size_average=True) * trunc_FG_mask).mean()
         ssim_score = (ssim(image, gt_image, size_average=True) * trunc_FG_mask).mean()
@@ -130,6 +133,25 @@ def create_3D_Gaussian_object(dataset, opt, pipe, testing_iterations=[30_000],
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
+            # # Save the gt_image used to compare with the rendered image as a png
+            # # gt_image: 3 x H x W
+            # gt_image = torch.clamp(gt_image, 0.0, 1.0)
+            # gt_image = (gt_image * 255).byte().permute(1, 2, 0).contiguous().cpu().numpy()
+            # gt_image = Image.fromarray(gt_image)
+            # gt_image.save(scene.model_path + "/gt_image" + str(iteration) + ".png")
+            # # Save the trunc_FG_mask as a png
+            # # trunc_FG_mask: 1 x H x W -> H x W x 1
+            # trunc_FG_mask = (trunc_FG_mask * 255).byte().permute(1, 2, 0).contiguous().cpu().numpy()
+            # # H x W x 1 -> H x W x 3
+            # trunc_FG_mask = trunc_FG_mask.repeat(3, axis=2)
+            # trunc_FG_mask = Image.fromarray(trunc_FG_mask)
+            # trunc_FG_mask.save(scene.model_path + "/trunc_FG_mask" + str(iteration) + ".png")
+            # image = torch.clamp(image, 0.0, 1.0)
+            # image = (image * 255).byte().permute(1, 2, 0).contiguous().cpu().numpy()
+            # image = Image.fromarray(image)
+            # image.save(scene.model_path + "/rendered_image" + str(iteration) + ".png")
+                
+                
 
             # Densification
             if iteration < opt.densify_until_iter:

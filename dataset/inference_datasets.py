@@ -411,14 +411,13 @@ class YCBInEOAT_Dataset(torch.utils.data.Dataset):
         # Add the 3D mesh with texture to the scene
         mesh = pyrender.Mesh.from_trimesh(mesh)
         mesh_pose = np.eye(4)
-        mesh_pose[2, 3] = self.diameter * 1.5 # Move the object back
+        mesh_pose[2, 3] = self.diameter * 1.5 # Move the object back # TODO: Move back only 1.0 times
         mesh_node = scene.add(mesh, pose=mesh_pose, name="mesh")
 
         # Camera setup
         camera = pyrender.PerspectiveCamera(yfov=np.pi / 3.0, aspectRatio=4.0 / 3.0)
         camera_pose = np.eye(4)  # Default camera pose, identity matrix
         camera_pose[2, 2] = -1  # Look at the object (positive z-axis instead of default negative z-axis)
-        # camera_pose[:3, 3] = np.array([0, 0, self.diameter * 1.5]) # Move the camera back # TODO: Move based on object size
         scene.add(camera, pose=camera_pose, name="camera")
 
         # Light setup

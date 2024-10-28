@@ -120,7 +120,29 @@ def apply_pose_to_points(
     np.ndarray
         The transformed points.
     """
-    return R @ points + T
+    return ((R @ points.T).T + T).T
+
+def reverse_pose_to_points(
+    points: np.ndarray, R: np.ndarray, T: np.ndarray
+) -> np.ndarray:
+    """
+    Reverse a pose from a set of points.
+
+    Parameters
+    ----------
+    points : np.ndarray
+        The points to transform. Shape: (N, 3), where N is the number of points.
+    R : np.ndarray
+        The rotation matrix.
+    T : np.ndarray
+        The translation vector.
+
+    Returns
+    -------
+    np.ndarray
+        The reversed points.
+    """
+    return (R.T @ (points - T).T).T
 
 
 def render_points_in_2d(points: np.ndarray, K: np.ndarray) -> np.ndarray:
@@ -139,8 +161,8 @@ def render_points_in_2d(points: np.ndarray, K: np.ndarray) -> np.ndarray:
     np.ndarray
         The rendered 2D points. Shape: (N, 2).
     """
-    pixels = K @ points
-    return pixels[:2] / pixels[2]
+    pixels = K @ points.T
+    return (pixels[:2] / pixels[2]).T
 
 
 def ray_sphere_intersection(

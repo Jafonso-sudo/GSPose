@@ -1,23 +1,31 @@
 import subprocess
 import os
-
-
-OBJECT_NAME = "lion"
-INPUT_NAME = "demo_lion"
-SPATRACKER_DOWNSAMPLE = 0.5
-SPATRACKER_GRID_SIZE = 0
+import sys
 
 file_dir = os.path.dirname(os.path.realpath(__file__))
 proj_root = os.path.abspath(os.path.join(file_dir, os.pardir))
 print(f"Project root: {proj_root}")
+sys.path.append(proj_root)
+
+from posingpixels.functions import estimate_first_pose_and_save_query_points, get_or_create_object
+from posingpixels.utils.gs_pose import load_test_data
+
+
+OBJECT_NAME = "lion"
+INPUT_NAME = "lion-far"
+SPATRACKER_DOWNSAMPLE = 0.5
+SPATRACKER_GRID_SIZE = 20
+
 
 sam2_dir = "../segment-anything-2"
 spatracker_dir = "../SpaTracker"
 
-object_video_dir = os.path.join(proj_root, f"data/objects/{OBJECT_NAME}/{OBJECT_NAME}-annotate")
+object_dir = os.path.join(proj_root, f"data/objects/{OBJECT_NAME}")
+
+object_video_dir = os.path.join(object_dir, f"{OBJECT_NAME}-annotate")
 object_video_path = f"{object_video_dir}/Frames.m4v"
 
-object_database_dir = os.path.join(proj_root, f"data/objects/{OBJECT_NAME}/{OBJECT_NAME}-database")
+object_database_dir = os.path.join(proj_root, object_dir, f"{OBJECT_NAME}-database")
 
 input_video_dir = os.path.join(proj_root, f"data/inputs/{INPUT_NAME}")
 input_video_path = f"{input_video_dir}/Frames.m4v"
@@ -58,18 +66,11 @@ conda deactivate
     subprocess.run(command, shell=True, check=True, executable='/bin/bash')
     
 # Step 2: Construct the gaussian object
-if not os.path.exists(object_database_dir):
-    print(f"Creating object database directory at {object_database_dir}")
-    command = f"""
-source $(conda info --base)/etc/profile.d/conda.sh && \
-conda activate gspose && \
-python posingpixels/create_object.py {INPUT_NAME} {OBJECT_NAME} && \
-conda deactivate
-""".strip()
-    subprocess.run(command, shell=True, check=True, executable='/bin/bash')
-
+get_or_create_object(object_directory=os.path.join(proj_root, f"data/objects/{OBJECT_NAME}"))
 # Step 3: Estimate the pose for the first frame of the input video (to get position for SAM2 mask)
 # TODO: Implement this, for now gonna just set the position to the center of the frame
+# video, camKs = load_test_data(input_video_dir)
+# estimate_first_pose_and_save_query_points(video, camKs, f"{input_video_dir}/queries.npy", object_directory=os.path.join(proj_root, f"data/objects/{OBJECT_NAME}"))
 
 # Step 3: Run SAM2 on the input video
 
@@ -80,7 +81,6 @@ if not os.path.exists(f"{input_video_dir}/img"):
 if len(os.listdir(f"{input_video_dir}/img")) == 0:
     print("Converting input video to images")
     subprocess.run(["ffmpeg", "-i", input_video_path, "-q:v", "2", "-start_number", "0", f"{input_video_dir}/img/%05d.jpg"])
-
 # Run SAM2 on object video if it hasn't been run yet
 if not os.path.exists(f"{input_video_dir}/masks"):
     print("Creating masks directory for the input video")

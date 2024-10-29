@@ -1,4 +1,4 @@
-name: gspose-copy
+name: gspose
 channels:
   - pytorch
   - conda-forge
@@ -26,4 +26,4 @@ dependencies:
     - scikit-image==0.19.3
     - opencv-python==4.8.0.76
     - pytorch-msssim==1.0.0
-    - ipykernel==6.29.5 
+    # - ipykernel==6.29.5 

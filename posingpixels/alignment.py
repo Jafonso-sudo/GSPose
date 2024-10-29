@@ -6,8 +6,19 @@ from gaussian_object.gaussian_model import GaussianModel
 from posingpixels.utils.geometry import (
     pixel_to_ray_dir,
     ray_splat_intersection,
-    reverse_pose_to_points,
     revert_pose_to_ray,
+)
+
+import matplotlib.pyplot as plt
+
+from posingpixels.visualization import get_gaussian_splat_pointcloud, plot_pointclouds
+from posingpixels.visualization import get_points_pointcloud
+from posingpixels.utils.gs_pose import render_gaussian_model_with_info
+from posingpixels.utils.alignment import get_boolean_mask, sample_safe_zone
+
+from posingpixels.utils.geometry import (
+    apply_pose_to_points,
+    render_points_in_2d,
 )
 
 
@@ -97,6 +108,7 @@ class PixelToGaussianAligner:
 
         return intersections, filtered_tracks
 
+
 class DepthInformedPixelToGaussianAligner:
     """
     A class to align pixel coordinates to a Gaussian splat based on predicted depth map.
@@ -127,7 +139,7 @@ class DepthInformedPixelToGaussianAligner:
     def align(self, points: np.ndarray) -> np.ndarray:
         """
         Align the tracked points to the Gaussian object.
-        
+
         Parameters
         ----------
         points : np.ndarray
@@ -152,3 +164,103 @@ class DepthInformedPixelToGaussianAligner:
         # intersection_identity = reverse_pose_to_points(intersections, self.R, self.T)
 
         return intersections
+
+
+def get_safe_query_points(
+    object: GaussianModel,
+    R: np.ndarray,
+    T: np.ndarray,
+    camK: np.ndarray,
+    H: int,
+    W: int,
+    alpha_threshold: float = 0.9,
+    depth_margin: int = 6,
+    depth_change: float = 0.01,
+    alpha_margin: int = 15,
+    alpha_change: float = 0.01,
+    min_pixel_distance: int = 25,
+    frame_idx: int = 0,
+    debug_vis: bool = False,
+):
+    render = render_gaussian_model_with_info(object, camK, H, W, R=R, T=T)
+
+    alpha = render["alpha"].detach().cpu().numpy().squeeze()
+    depth = render["depth"].detach().cpu().numpy().squeeze()
+
+    if debug_vis:
+        plt.imshow(alpha, cmap="rainbow")
+        plt.title("Alpha")
+        plt.show()
+        plt.imshow(depth, cmap="rainbow")
+        plt.title("Depth")
+        plt.show()
+
+    alpha[alpha < alpha_threshold] = 0
+    depth[alpha < alpha_threshold] = 0
+
+    if debug_vis:
+        plt.imshow(alpha, cmap="rainbow")
+        plt.title(f"Filtered Alpha (Alpha > {alpha_threshold})")
+        plt.show()
+        plt.imshow(depth, cmap="rainbow")
+        plt.title(f"Filtered Depth (Alpha > {alpha_threshold})")
+        plt.show()
+
+    safe_region = (
+        # Depth is constant within a margin
+        get_boolean_mask(depth, depth_margin, depth_change)
+        # Alpha is sufficiently high
+        & (alpha > alpha_threshold)
+        # Alpha is constant within a margin
+        & get_boolean_mask(alpha, alpha_margin, alpha_change)
+    )
+
+    sampled_pixels = sample_safe_zone(safe_region, min_pixel_distance)
+
+    if debug_vis:
+        plt.imshow(alpha > alpha_threshold, cmap="gray")
+        plt.imshow(safe_region, alpha=0.5, cmap="Reds")
+        plt.scatter(sampled_pixels[:, 0], sampled_pixels[:, 1], c="r", s=1)
+        plt.show()
+
+        plt.imshow(render["image"])
+        plt.scatter(sampled_pixels[:, 0], sampled_pixels[:, 1], c="r", s=1)
+        plt.show()
+
+    depth_aligner = DepthInformedPixelToGaussianAligner(
+        T=T,
+        R=R,
+        K=camK,
+        depth_map=depth,
+    )
+
+    intersections = depth_aligner.align(sampled_pixels)
+
+    if debug_vis:
+        intersections_pointcloud = get_points_pointcloud(intersections)
+        object_pointcloud = get_gaussian_splat_pointcloud(object)
+
+        plot_pointclouds(
+            {"Object": object_pointcloud, "Intersections": intersections_pointcloud},
+            "Aligned Pixels in Gaussian Object",
+        )
+
+    posed_intersections = apply_pose_to_points(intersections, R, T)
+    projected_intersections = render_points_in_2d(posed_intersections.T, camK)
+
+    if debug_vis:
+        plt.imshow(alpha > alpha_threshold, cmap="gray")
+        plt.imshow(safe_region, alpha=0.5, cmap="Reds")
+        plt.scatter(
+            projected_intersections[:, 0], projected_intersections[:, 1], c="r", s=1
+        )
+        plt.show()
+
+    # Turn intersections_projected from N x 2 to N x 3 by prepending with frame_idx
+    return np.concatenate(
+        [
+            frame_idx * np.ones((len(projected_intersections), 1)),
+            projected_intersections,
+        ],
+        axis=1,
+    )

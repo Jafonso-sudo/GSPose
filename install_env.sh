@@ -15,6 +15,17 @@ python setup.py install
 cd ../simple-knn
 python setup.py install
 
+cd ../co-tracker
+pip install -e .
+pip install matplotlib flow_vis tqdm tensorboard
+mkdir -p checkpoints
+cd checkpoints
+# download the online (multi window) model
+wget https://huggingface.co/facebook/cotracker3/resolve/main/scaled_online.pth
+# download the offline (single window) model
+wget https://huggingface.co/facebook/cotracker3/resolve/main/scaled_offline.pth
+cd ..
+
 cd ../../model/curope
 python setup.py install
 cd ../..

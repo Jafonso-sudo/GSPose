@@ -11,3 +11,6 @@
 [submodule "submodules/diff-gaussian-rasterization-personal"]
 	path = submodules/diff-gaussian-rasterization-personal
 	url = https://github.com/Jafonso-sudo/diff-gaussian-rasterization
+[submodule "submodules/co-tracker"]
+	path = submodules/co-tracker
+	url = https://github.com/Jafonso-sudo/co-tracker

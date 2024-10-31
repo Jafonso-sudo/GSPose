@@ -15,16 +15,13 @@ from config import inference_cfg as CFG
 from dataset.demo_dataset import OnePoseCap_Dataset
 from dataset.inference_datasets import YCBInEOAT_Dataset
 from gaussian_object.gaussian_model import GaussianModel
+from gaussian_object.arguments import ModelParams, OptimizationParams, PipelineParams
+from gaussian_object.build_3DGaussianObject import create_3D_Gaussian_object
 from inference import (
     GS_Tracker,
-    ModelParams,
-    OptimizationParams,
-    PipelineParams,
-    create_3D_Gaussian_object,
     create_reference_database_from_RGB_images,
     multiple_initial_pose_inference,
     perform_segmentation_and_encoding,
-    render_Gaussian_object_model,
     render_Gaussian_object_model_and_get_radii,
 )
 from model.network import model_arch as ModelNet
@@ -55,7 +52,6 @@ def load_test_data(video_directory_path: str):
     query_video_frames = media.read_video(
         os.path.join(video_directory_path, "Frames.m4v")
     )  # NxHxWx3
-    query_video_frames.shape
 
     return query_video_frames, query_video_camKs
 

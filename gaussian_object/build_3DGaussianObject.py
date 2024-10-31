@@ -111,10 +111,12 @@ def create_3D_Gaussian_object(dataset, opt, pipe, testing_iterations=[30_000],
         # loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
         # TODO: Introduce alpha in the loss function. How? The alpha should be similar to the mask in the image
         # i.e. where there is the object, the alpha should be 1, and where there is no object, the alpha should be 0.
-
+        alpha = render_pkg["alpha"]
+        alpha_lambda = 0.0
+        alpha_loss = torch.abs(alpha - trunc_FG_mask).mean()
         Ll1 = (l1_loss(image, gt_image, size_average=True) * trunc_FG_mask).mean()
         ssim_score = (ssim(image, gt_image, size_average=True) * trunc_FG_mask).mean()
-        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_score)
+        loss = (1.0 - opt.lambda_dssim - alpha_lambda) * Ll1 + opt.lambda_dssim * (1.0 - ssim_score) + alpha_lambda * alpha_loss
 
         loss.backward()
         iter_end.record()

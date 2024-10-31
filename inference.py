@@ -47,14 +47,6 @@ gaussian_PipeP = PipelineParams(parser)
 gaussian_OptimP = OptimizationParams(parser)
 gaussian_BG = torch.zeros((3), device=device)
 
-model_net = ModelNet().to(device)
-ckpt_file = os.path.join(PROJ_ROOT, 'checkpoints/model_weights.pth')
-
-ckpt_weight = torch.load(ckpt_file, map_location=device)
-model_net.load_state_dict(ckpt_weight)
-print('Pretrained weights are loaded from ', ckpt_file.split('/')[-1])
-model_net.eval()
-
 def create_reference_database_from_RGB_images(model_func, obj_dataset, device, save_pred_mask=False):
     use_sam2_mask = obj_dataset.use_sam2 if hasattr(obj_dataset, 'use_sam2') else False
     use_gt_mask = obj_dataset.use_gt_mask if hasattr(obj_dataset, 'use_gt_mask') else False   
@@ -1318,6 +1310,15 @@ if __name__ == "__main__":
     parser.add_argument('--build_GS_model', action='store_true', help='enable fine detection')
     parser.add_argument('--enable_GS_Refiner', action='store_true', help='enable 3D Gaussian Splatting Refiner')
     args = parser.parse_args()
+    
+    # Load modelnet
+    model_net = ModelNet().to(device)
+    ckpt_file = os.path.join(PROJ_ROOT, 'checkpoints/model_weights.pth')
+
+    ckpt_weight = torch.load(ckpt_file, map_location=device)
+    model_net.load_state_dict(ckpt_weight)
+    print('Pretrained weights are loaded from ', ckpt_file.split('/')[-1])
+    model_net.eval()
 
 
     CFG.USE_YOLO_BBOX = False

@@ -1,6 +1,8 @@
+from typing import Optional, Tuple
 import cv2
 import numpy as np
 import tqdm
+import trimesh
 from gaussian_object.gaussian_model import GaussianModel
 
 from posingpixels.utils.geometry import (
@@ -11,6 +13,7 @@ from posingpixels.utils.geometry import (
 
 import matplotlib.pyplot as plt
 
+from posingpixels.utils.offscreen_renderer import ModelRendererOffscreen
 from posingpixels.visualization import get_gaussian_splat_pointcloud, plot_pointclouds
 from posingpixels.visualization import get_points_pointcloud
 from posingpixels.utils.gs_pose import render_gaussian_model_with_info
@@ -167,12 +170,13 @@ class DepthInformedPixelToGaussianAligner:
 
 
 def get_safe_query_points(
-    object: GaussianModel,
     R: np.ndarray,
     T: np.ndarray,
     camK: np.ndarray,
     H: int,
     W: int,
+    object: Optional[GaussianModel] = None,
+    mesh: Optional[trimesh.Trimesh] = None,
     alpha_threshold: float = 0.9,
     depth_margin: int = 6,
     depth_change: float = 0.01,
@@ -181,11 +185,41 @@ def get_safe_query_points(
     min_pixel_distance: int = 25,
     frame_idx: int = 0,
     debug_vis: bool = False,
-):
-    render = render_gaussian_model_with_info(object, camK, H, W, R=R, T=T)
-
-    alpha = render["alpha"].detach().cpu().numpy().squeeze()
-    depth = render["depth"].detach().cpu().numpy().squeeze()
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Computes safe query points for alignment based on the provided object or mesh.
+    Parameters:
+    R (np.ndarray): Rotation matrix.
+    T (np.ndarray): Translation vector.
+    camK (np.ndarray): Camera intrinsic matrix.
+    H (int): Height of the image.
+    W (int): Width of the image.
+    object (Optional[GaussianModel]): Gaussian model of the object. Default is None.
+    mesh (Optional[trimesh.Trimesh]): Mesh of the object. Default is None.
+    alpha_threshold (float): Threshold for alpha values to consider a pixel. Default is 0.9.
+    depth_margin (int): Margin for depth consistency. Default is 6.
+    depth_change (float): Allowed change in depth for consistency. Default is 0.01.
+    alpha_margin (int): Margin for alpha consistency. Default is 15.
+    alpha_change (float): Allowed change in alpha for consistency. Default is 0.01.
+    min_pixel_distance (int): Minimum distance between sampled pixels. Default is 25.
+    frame_idx (int): Frame index for the current image. Default is 0.
+    debug_vis (bool): Flag to enable debug visualization. Default is False.
+    Returns:
+    Tuple[np.ndarray, np.ndarray]: Unposed intersections n x 3 and projected intersections with frame index n x 3.
+    """
+    assert object or mesh, "Either object or mesh must be provided."
+    if object:
+        render = render_gaussian_model_with_info(object, camK, H, W, R=R, T=T)
+        rgb = render["image"]
+        alpha = render["alpha"].detach().cpu().numpy().squeeze()
+        depth = render["depth"].detach().cpu().numpy().squeeze()
+    elif mesh:
+        renderer = ModelRendererOffscreen(camK, H, W)
+        pose = np.eye(4)
+        pose[:3, :3] = R
+        pose[:3, 3] = T
+        rgb, depth = renderer.render(mesh, pose)
+        alpha = (depth > 0).astype(float)
 
     if debug_vis:
         plt.imshow(alpha, cmap="rainbow")
@@ -223,7 +257,7 @@ def get_safe_query_points(
         plt.scatter(sampled_pixels[:, 0], sampled_pixels[:, 1], c="r", s=1)
         plt.show()
 
-        plt.imshow(render["image"])
+        plt.imshow(rgb)
         plt.scatter(sampled_pixels[:, 0], sampled_pixels[:, 1], c="r", s=1)
         plt.show()
 
@@ -238,7 +272,10 @@ def get_safe_query_points(
 
     if debug_vis:
         intersections_pointcloud = get_points_pointcloud(intersections)
-        object_pointcloud = get_gaussian_splat_pointcloud(object)
+        if object:
+            object_pointcloud = get_gaussian_splat_pointcloud(object)
+        if mesh:
+            object_pointcloud = get_points_pointcloud(mesh.vertices, color=np.array([1, 0, 0]))
 
         plot_pointclouds(
             {"Object": object_pointcloud, "Intersections": intersections_pointcloud},
@@ -257,7 +294,7 @@ def get_safe_query_points(
         plt.show()
 
     # Turn intersections_projected from N x 2 to N x 3 by prepending with frame_idx
-    return np.concatenate(
+    return intersections, np.concatenate(
         [
             frame_idx * np.ones((len(projected_intersections), 1)),
             projected_intersections,

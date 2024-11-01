@@ -2,6 +2,7 @@ pip install torch==2.0.1+cu117 torchvision==0.15.2+cu117 -f https://download.pyt
 pip install "git+https://github.com/facebookresearch/pytorch3d.git"
 pip install xformers==0.0.22
 pip install pyrender
+pip install ffmpeg-python
 
 cd submodules/Connected_components_PyTorch
 python setup.py install

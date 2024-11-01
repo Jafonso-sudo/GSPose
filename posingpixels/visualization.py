@@ -28,7 +28,7 @@ def get_points_pointcloud(
     Pointclouds
         The point cloud.
     """
-    if not color:
+    if color is None:
         color = np.array([255, 0, 0])
     if len(color.shape) == 1:
         colors = np.tile(color / 255, (points.shape[0], 1))
@@ -66,7 +66,7 @@ def get_ray_pointcloud(
     Pointclouds
         The point cloud.
     """
-    if not color:
+    if color is None:
         color = np.array([255, 0, 0])
     if len(color.shape) == 1:
         colors = np.tile(color / 255, (n_points, 1))
@@ -97,7 +97,7 @@ def get_gaussian_splat_pointcloud(
         The point cloud.
     """
     gaussian_object.initialize_pose()  # IMPORTANT: Otherwise the object will be rendered with the previous pose applied
-    if not pose:
+    if pose is None:
         pose = np.eye(4)
 
     points = gaussian_object.get_xyz.squeeze().detach().cpu().numpy()

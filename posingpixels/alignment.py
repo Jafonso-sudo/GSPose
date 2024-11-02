@@ -283,7 +283,7 @@ def get_safe_query_points(
         )
 
     posed_intersections = apply_pose_to_points(intersections, R, T)
-    projected_intersections = render_points_in_2d(posed_intersections.T, camK)
+    projected_intersections = render_points_in_2d(posed_intersections, camK)
 
     if debug_vis:
         plt.imshow(alpha > alpha_threshold, cmap="gray")

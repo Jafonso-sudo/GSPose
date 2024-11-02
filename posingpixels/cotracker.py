@@ -56,6 +56,7 @@ def get_online_cotracker_predictions(
     downcast=False,
     device=torch.device("cuda"),
 ):
+    offline = step != 8
     if queries is not None and grid_size:
         raise ValueError("Cannot provide queries and grid_size at the same time. Provide support_grid_size instead.")
     queries_torch = torch.tensor(queries).unsqueeze(0).to(device).float() if queries is not None else None
@@ -64,7 +65,7 @@ def get_online_cotracker_predictions(
     )
     is_first_step = True
     with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=downcast):
-        cotracker_online = CoTrackerOnlinePredictor(window_len=step * 2).to(device)
+        cotracker_online = CoTrackerOnlinePredictor(window_len=step * 2, offline=offline).to(device)
         for batch in tqdm(batch_iterator, desc="Processing batches"):
             pred_tracks, pred_visibility, confidence = cotracker_online(
                 video_chunk=batch, is_first_step=is_first_step, grid_size=grid_size, queries=queries_torch

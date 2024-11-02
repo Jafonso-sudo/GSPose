@@ -111,16 +111,17 @@ def apply_pose_to_points(
     points : np.ndarray
         The points to transform. Shape: (N, 3), where N is the number of points.
     R : np.ndarray
-        The rotation matrix.
+        The rotation matrix. Shape: (3, 3).
     T : np.ndarray
-        The translation vector.
+        The translation vector. Shape: (3,).
 
     Returns
     -------
     np.ndarray
         The transformed points.
     """
-    return ((R @ points.T).T + T).T
+    # TODO: I believe the last transpose is not necessary, if something breaks, add it outside the function
+    return ((R @ points.T).T + T)
 
 def reverse_pose_to_points(
     points: np.ndarray, R: np.ndarray, T: np.ndarray

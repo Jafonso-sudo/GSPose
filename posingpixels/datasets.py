@@ -4,6 +4,10 @@ import torchvision.transforms as transforms
 import os
 import torch
 from typing import Iterator, Optional, Tuple
+import cv2
+
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 
 class ImageBatchIterator:
@@ -16,6 +20,7 @@ class ImageBatchIterator:
         folder_path: str,
         batch_size: int,
         overlap: int = 0,
+        limit: Optional[int] = None,
         image_size: Optional[Tuple[int, int]] = None,
         shuffle: bool = False,
         rgb_mode: bool = False,
@@ -28,6 +33,7 @@ class ImageBatchIterator:
             folder_path: Path to the folder containing images
             batch_size: Number of images per batch
             overlap: Number of images to overlap between consecutive batches
+            limit: Maximum number of images to load
             image_size: Tuple of (height, width) to resize images to
             shuffle: Whether to shuffle the dataset each epoch
         """
@@ -41,12 +47,14 @@ class ImageBatchIterator:
         self.shuffle = shuffle
         self.rgb_mode = rgb_mode
         self.device = device
-        
+
         # Get image size from first image if not provided
         if image_size is None:
-            with Image.open(os.path.join(folder_path, os.listdir(folder_path)[0])) as img:
+            with Image.open(
+                os.path.join(folder_path, os.listdir(folder_path)[0])
+            ) as img:
                 self.image_size = tuple(img.size[::-1])
-                
+
         # Get list of image files
         self.image_files = sorted(
             [
@@ -55,13 +63,15 @@ class ImageBatchIterator:
                 if f.lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".webp"))
             ]
         )
+        if limit is not None:
+            self.image_files = self.image_files[:limit]
 
         # Initialize transform pipeline
         self.transform = transforms.Compose(
             [
-                transforms.Resize(self.image_size),
+                # transforms.Resize(self.image_size),
                 transforms.ToTensor(),
-                # transforms.Normalize(mean=[0.485, 0.456, 0.406], 
+                # transforms.Normalize(mean=[0.485, 0.456, 0.406],
                 #               std=[0.229, 0.224, 0.225])
             ]
         )
@@ -117,3 +127,34 @@ class ImageBatchIterator:
                 (len(self.image_files) - self.overlap)
                 // (self.batch_size - self.overlap),
             )
+
+
+def load_video_images(
+    video_img_directory: str,
+    limit: Optional[int] = None,
+    device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+    dtype=torch.uint8,
+) -> torch.Tensor:
+    # Collect and sort filenames
+    video_files = sorted(Path(video_img_directory).glob("*.jpg"))[:limit]
+
+    # Function to read an image
+    def read_image(file_path):
+        return cv2.cvtColor(cv2.imread(str(file_path)), cv2.COLOR_BGR2RGB)
+
+    # Parallel reading
+    with ThreadPoolExecutor() as executor:
+        images = list(executor.map(read_image, video_files))
+
+    # Convert to a NumPy array
+    video_np = np.stack(images, axis=0)
+
+    # Convert to PyTorch tensor
+    video = (
+        torch.from_numpy(video_np)
+        .to(dtype=dtype, device=device)
+        .permute(0, 3, 1, 2)
+        .unsqueeze(0)
+    )
+
+    return video

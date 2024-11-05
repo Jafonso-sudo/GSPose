@@ -7,7 +7,13 @@
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 import numpy as np
 import pyrender
-
+import numpy as np
+import pyrender
+from tqdm import tqdm
+import trimesh
+from multiprocessing import Pool
+from typing import List, Tuple, Optional
+import copy
 
 cvcam_in_glcam = np.array([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
 
@@ -29,30 +35,13 @@ class ModelRendererOffscreen:
         )
         self.cam_node = self.scene.add(self.camera, pose=np.eye(4), name="cam")
         self.mesh_nodes = []
+        self.zfar = zfar
 
         self.H = H
         self.W = W
         self.r = pyrender.OffscreenRenderer(self.W, self.H)
 
-    def set_cam_pose(self, cam_pose):
-        self.cam_node.matrix = cam_pose
-
-    def add_mesh(self, mesh):
-        mesh = pyrender.Mesh.from_trimesh(mesh, smooth=False)
-        mesh_node = self.scene.add(
-            mesh, pose=np.eye(4), name="ob"
-        )  # Object pose parent is cam
-        self.mesh_nodes.append(mesh_node)
-
-    def add_point_light(self, intensity=3):
-        light = pyrender.DirectionalLight(color=[1.0, 1.0, 1.0], intensity=intensity)
-        self.scene.add(light, pose=np.eye(4))  # Same as camera position
-
-    def clear_mesh_nodes(self):
-        for n in self.mesh_nodes:
-            self.scene.remove_node(n)
-
-    def render(self, mesh=None, ob_in_cvcam=None, get_normal=False):
+    def render(self, ob_in_cvcam, mesh=None):
         if mesh is not None:
             mesh = mesh.copy()
             mesh.apply_transform(cvcam_in_glcam @ ob_in_cvcam)
@@ -65,3 +54,37 @@ class ModelRendererOffscreen:
             self.scene.remove_node(mesh_node)
 
         return color, depth
+    
+    def render_batch(self, ob_in_cvcam, mesh=None, num_workers=4):
+        # Prepare arguments for parallel processing
+        args = [(pose, mesh, self.K, self.H, self.W, self.zfar) 
+                for pose in ob_in_cvcam]
+        
+        # Run parallel rendering with progress bar
+        results = _imap_unordered_bar(_render_single, args, num_workers=num_workers)
+        
+        # Separate colors and depths
+        colors, depths = zip(*results)
+        return list(colors), list(depths)
+
+def _render_single(args):
+    """Helper function for parallel rendering."""
+    pose, mesh, cam_K, H, W, zfar = args
+    renderer = ModelRendererOffscreen(cam_K, H, W, zfar)
+    return renderer.render(mesh, pose)
+
+def _imap_unordered_bar(func, args, total=None, num_workers=4):
+        """
+        Wrapper function to add tqdm to imap_unordered.
+        """
+        if total is None:
+            total = len(args)
+        
+        with Pool(processes=num_workers) as pool:
+            results = []
+            with tqdm(total=total, desc="Rendering") as pbar:
+                for result in pool.imap_unordered(func, args):
+                    results.append(result)
+                    pbar.update()
+            
+            return results

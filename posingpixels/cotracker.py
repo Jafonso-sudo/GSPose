@@ -14,6 +14,9 @@ def get_offline_cotracker_predictions(
     downcast=False,
     limit=None,
     device=torch.device("cuda"),
+    init_coords=None,
+    init_vis=None,
+    init_confidence=None,
 ):
     with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=downcast):
         queries_torch = (
@@ -31,6 +34,9 @@ def get_offline_cotracker_predictions(
             grid_size=grid_size,
             queries=queries_torch,
             is_first_step=True,
+            init_coords=init_coords,
+            init_vis=init_vis,
+            init_confidence=init_confidence,
         )  # B T N 2,  B T N 1, B T N 1
     return pred_tracks, pred_visibility, confidence
 

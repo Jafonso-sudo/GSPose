@@ -1,6 +1,10 @@
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 import numpy as np
 from gaussian_object.gaussian_model import GaussianModel
+
+
+from scipy.spatial.transform import Rotation as R
+from scipy.spatial.transform import Slerp
 
 
 def pixel_to_ray_dir(pixel: np.ndarray, K: np.ndarray) -> np.ndarray:
@@ -121,7 +125,8 @@ def apply_pose_to_points(
         The transformed points.
     """
     # TODO: I believe the last transpose is not necessary, if something breaks, add it outside the function
-    return ((R @ points.T).T + T)
+    return (R @ points.T).T + T
+
 
 def reverse_pose_to_points(
     points: np.ndarray, R: np.ndarray, T: np.ndarray
@@ -295,3 +300,42 @@ def ray_sphere_intersection_batch(
     t2[mask] = (-b[mask] + sqrt_discriminant) / (2.0 * a_expanded)
 
     return np.stack((t1, t2), axis=-1)  # (N, M, 2)
+
+
+def interpolate_poses(R_start, T_start, R_end, T_end, num_steps) -> List[np.ndarray]:
+    """
+    Interpolate between initial (R_start, T_start) and final (R_end, T_end) poses.
+
+    Parameters:
+    R_start (numpy.ndarray): Initial rotation matrix (3x3).
+    T_start (numpy.ndarray): Initial translation vector (3,).
+    R_end (numpy.ndarray): Final rotation matrix (3x3).
+    T_end (numpy.ndarray): Final translation vector (3,).
+    num_steps (int): Number of interpolation steps.
+
+    Returns:
+    list of np.ndarray: A list of interpolated poses, where each pose is a a 4x4 pose matrix.
+    """
+    # Convert rotation matrices to `Rotation` objects
+    rot_start = R.from_matrix(R_start)
+    rot_end = R.from_matrix(R_end)
+
+    # Generate a series of fractional steps from 0 to 1
+    fractions = np.linspace(0, 1, num_steps)
+
+    # Interpolate rotation using built-in SLERP
+    slerp = Slerp([0, 1], R.from_quat([rot_start.as_quat(), rot_end.as_quat()]))
+    rotations = slerp(fractions)
+
+    # Interpolate translation using LERP
+    translations = np.array([T_start + f * (T_end - T_start) for f in fractions])
+
+    # Combine rotations and translations into poses
+    interpolated_poses = []
+    for i in range(num_steps):
+        pose = np.eye(4)
+        pose[:3, :3] = rotations[i].as_matrix()
+        pose[:3, 3] = translations[i]
+        interpolated_poses.append(pose)
+
+    return interpolated_poses

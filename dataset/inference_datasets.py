@@ -343,43 +343,6 @@ class LINEMOD_Dataset_GEN6D(torch.utils.data.Dataset):
         return new_batch
 
 class YCBInEOAT_Dataset(torch.utils.data.Dataset):
-    def get_size_from_ply(self):
-        mesh = trimesh.load(self.obj_ply_path)
-        
-        bounding_box = mesh.bounds
-        
-        width = bounding_box[1][0] - bounding_box[0][0]
-        height = bounding_box[1][1] - bounding_box[0][1]
-        depth = bounding_box[1][2] - bounding_box[0][2]
-        
-        width_gt = self.model_info['object_width']
-        ratio = (width_gt / width) * self.to_meter_scale
-        
-        width *= ratio
-        height *= ratio
-        depth *= ratio
-        
-        return width, height, depth
-    
-    def calculate_mesh_diameter(self):
-        """Calculate the diameter of the mesh."""
-        mesh = trimesh.load(self.obj_path)
-        vertices = mesh.vertices
-        # Compute the convex hull of the vertices
-        hull = ConvexHull(vertices)
-
-        # Find the maximum pairwise distance between vertices on the convex hull
-        hull_vertices = vertices[hull.vertices]
-        max_distance = 0
-
-        # Compute all pairwise distances between the hull vertices
-        for i in range(len(hull_vertices)):
-            for j in range(i+1, len(hull_vertices)):
-                dist = np.linalg.norm(hull_vertices[i] - hull_vertices[j])
-                if dist > max_distance:
-                    max_distance = dist
-        return max_distance 
-    
     def get_rendered_image(self, degree = 7):
         def deterministic_rotation_grid(x1, x2, x3):
             """Generate n deterministic, uniformly spaced rotation matrices."""

@@ -218,7 +218,7 @@ def get_safe_query_points(
         pose = np.eye(4)
         pose[:3, :3] = R
         pose[:3, 3] = T
-        rgb, depth = renderer.render(mesh, pose)
+        rgb, depth = renderer.render(pose, mesh)
         alpha = (depth > 0).astype(float)
 
     if debug_vis:

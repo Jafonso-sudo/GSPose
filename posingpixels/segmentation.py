@@ -55,7 +55,7 @@ def get_bbox_from_mask(mask):
 
 
 def process_image_crop(
-    image: np.ndarray, bbox: tuple, padding: int, target_size: tuple
+    image: np.ndarray, bbox: tuple, padding: int, target_size: tuple, force_min_size: bool = False, force_aspect_ratio: bool = True
 ) -> Tuple[np.ndarray, tuple, tuple]:
     """
     Process an image by cropping around a bounding box with padding and resizing to target dimensions.
@@ -65,6 +65,8 @@ def process_image_crop(
         bbox: Tuple of (x1, y1, x2, y2) coordinates
         padding: Initial padding amount in pixels
         target_size: Tuple of (target_height, target_width)
+        force_min_size: If True, the image will be scaled up to the target size if it is smaller
+        force_aspect_ratio: If True, the image will be scaled to the target size while maintaining the aspect ratio
 
     Returns:
         tuple containing:
@@ -74,16 +76,61 @@ def process_image_crop(
     """
     orig_h, orig_w = image.shape[:2]
     target_h, target_w = target_size
+    aspect_ratio = target_w / target_h
     x1, y1, x2, y2 = bbox
 
     # Calculate initial crop dimensions with padding
-    crop_x1 = max(0, x1 - padding)
-    crop_y1 = max(0, y1 - padding)
-    crop_x2 = min(orig_w, x2 + padding)
-    crop_y2 = min(orig_h, y2 + padding)
+    crop_x1 = x1 - padding
+    crop_y1 = y1 - padding
+    crop_x2 = x2 + padding
+    crop_y2 = y2 + padding
+    
+    # If the crop is too small, expand it to the target size
+    if force_min_size:
+        crop_w = crop_x2 - crop_x1
+        crop_h = crop_y2 - crop_y1
+        if crop_w < target_w:
+            crop_x1 = x1 - (target_w - crop_w) // 2
+            crop_x2 = x2 + (target_w - crop_w) // 2
+        if crop_h < target_h:
+            crop_y1 = y1 - (target_h - crop_h) // 2
+            crop_y2 = y2 + (target_h - crop_h) // 2
+            
+    new_w = crop_x2 - crop_x1
+    new_h = crop_y2 - crop_y1
+    
+    # If the aspect ratio is to be maintained, increase the crop size to match the target aspect ratio
+    if force_aspect_ratio:
+        if new_w / new_h > aspect_ratio:
+            new_h = int(new_w / aspect_ratio)
+        else:
+            new_w = int(new_h * aspect_ratio)
+        # Recenter the bounding box around the original center
+        crop_x1 = (crop_x1 + crop_x2) // 2 - new_w // 2
+        crop_x2 = crop_x1 + new_w
+        crop_y1 = (crop_y1 + crop_y2) // 2 - new_h // 2
+        crop_y2 = crop_y1 + new_h
 
-    # Crop the image
-    cropped = image[crop_y1:crop_y2, crop_x1:crop_x2]
+    # Create a black background image
+    background = np.zeros((new_h, new_w, image.shape[2]), dtype=image.dtype)
+
+    # Determine the region of the original image that fits into the padded area
+    src_x1 = max(0, crop_x1)
+    src_y1 = max(0, crop_y1)
+    src_x2 = min(orig_w, crop_x2)
+    src_y2 = min(orig_h, crop_y2)
+
+    # Determine where this region should be placed on the black background
+    dst_x1 = max(0, -crop_x1)
+    dst_y1 = max(0, -crop_y1)
+    dst_x2 = dst_x1 + (src_x2 - src_x1)
+    dst_y2 = dst_y1 + (src_y2 - src_y1)
+
+    # Place the cropped image region onto the black background
+    background[dst_y1:dst_y2, dst_x1:dst_x2] = image[src_y1:src_y2, src_x1:src_x2]
+
+    # `background` now contains the padded cropped image
+    cropped = background
 
     # Convert cropped image to tensor and add batch and channel dimensions
     cropped_tensor = torch.tensor(cropped.copy()).permute(2, 0, 1).unsqueeze(0).float()
@@ -105,3 +152,55 @@ def process_image_crop(
         (crop_x1, crop_y1, crop_x2, crop_y2),
         (scale_x, scale_y),
     )
+
+# def process_image_crop(
+#     image: np.ndarray, bbox: tuple, padding: int, target_size: tuple
+# ) -> Tuple[np.ndarray, tuple, tuple]:
+#     """
+#     Process an image by cropping around a bounding box with padding and resizing to target dimensions.
+
+#     Args:
+#         image: Input image as numpy array (H, W, C)
+#         bbox: Tuple of (x1, y1, x2, y2) coordinates
+#         padding: Initial padding amount in pixels
+#         target_size: Tuple of (target_height, target_width)
+
+#     Returns:
+#         tuple containing:
+#         - Processed image as numpy array
+#         - New bounding box coordinates
+#         - Zoom factor applied
+#     """
+#     orig_h, orig_w = image.shape[:2]
+#     target_h, target_w = target_size
+#     x1, y1, x2, y2 = bbox
+
+#     # Calculate initial crop dimensions with padding
+#     crop_x1 = max(0, x1 - padding)
+#     crop_y1 = max(0, y1 - padding)
+#     crop_x2 = min(orig_w, x2 + padding)
+#     crop_y2 = min(orig_h, y2 + padding)
+
+#     # Crop the image
+#     cropped = image[crop_y1:crop_y2, crop_x1:crop_x2]
+
+#     # Convert cropped image to tensor and add batch and channel dimensions
+#     cropped_tensor = torch.tensor(cropped.copy()).permute(2, 0, 1).unsqueeze(0).float()
+
+#     # Interpolate to target size
+#     scaled = F.interpolate(
+#         cropped_tensor, size=target_size, mode="bilinear", align_corners=True
+#     )
+
+#     # Remove batch and channel dimensions
+#     scaled = scaled.squeeze(0).permute(1, 2, 0)
+
+#     # Calculate scaling factors
+#     scale_x = target_w / (crop_x2 - crop_x1)
+#     scale_y = target_h / (crop_y2 - crop_y1)
+
+#     return (
+#         scaled.detach().cpu().numpy(),
+#         (crop_x1, crop_y1, crop_x2, crop_y2),
+#         (scale_x, scale_y),
+#     )

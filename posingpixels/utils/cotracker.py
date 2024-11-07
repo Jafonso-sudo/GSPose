@@ -78,3 +78,27 @@ def scale_by_crop(points, bboxes, scaling_factors):
     points *= scaling_factors
 
     return points
+
+def unscale_by_crop(points, bboxes, scaling_factors):
+    """
+    Reverse the scaling and cropping operations to get original coordinates.
+    
+    Args:
+        points: 2D points in cropped space (B, N, 2)
+        bboxes: Bounding boxes used for cropping (B, 4)
+        scaling_factors: Scaling factors that were applied (B, 2)
+        
+    Returns:
+        Original uncropped and unscaled points (B, N, 2)
+    """
+    points = points.clone()
+    bboxes = bboxes.unsqueeze(1).repeat(1, points.shape[1], 1)
+    scaling_factors = scaling_factors.unsqueeze(1).repeat(1, points.shape[1], 1)
+    
+    # First reverse the scaling
+    points /= scaling_factors
+    
+    # Then reverse the cropping by adding back the top-left corner offset
+    points += bboxes[:, :, :2]
+    
+    return points

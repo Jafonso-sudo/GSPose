@@ -136,7 +136,7 @@ def load_video_images(
     dtype=torch.uint8,
 ) -> torch.Tensor:
     # Collect and sort filenames
-    video_files = sorted(Path(video_img_directory).glob("*.jpg"))[:limit]
+    video_files = sorted(Path(video_img_directory).glob("*.jpg"))[:limit] + sorted(Path(video_img_directory).glob("*.png"))[:limit]
 
     # Function to read an image
     def read_image(file_path):

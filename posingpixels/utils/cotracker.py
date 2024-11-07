@@ -1,3 +1,4 @@
+from cotracker.utils.visualizer import Visualizer
 import numpy as np
 
 
@@ -102,3 +103,22 @@ def unscale_by_crop(points, bboxes, scaling_factors):
     points += bboxes[:, :, :2]
     
     return points
+
+def visualize_results(
+    video,
+    pred_tracks,
+    pred_visibility,
+    pred_confidence,
+    save_dir,
+    num_of_main_queries=None,
+    filename="video",
+):
+    if num_of_main_queries is None:
+        num_of_main_queries = pred_tracks.shape[2]
+    vis = Visualizer(save_dir=save_dir, pad_value=0, linewidth=3)
+    vis.visualize(
+        video,
+        pred_tracks[:, :, :num_of_main_queries, :],
+        (pred_visibility * pred_confidence > 0.6)[:, :, :num_of_main_queries],
+        filename=filename,
+    )

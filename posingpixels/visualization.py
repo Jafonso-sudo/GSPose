@@ -237,7 +237,7 @@ def overlay_gaussian_splat_on_video(
 
 def overlay_bounding_box_on_video(
     video_frames: np.ndarray,
-    reference_database,
+    cannon_3D_bbox: np.ndarray,
     camKs: np.ndarray,
     poses: np.ndarray,
     color=(0, 255, 0),
@@ -259,7 +259,6 @@ def overlay_bounding_box_on_video(
     np.ndarray
         The video frames with the bounding box overlaid.
     """
-    cannon_3D_bbox = reference_database["obj_bbox3D"].cpu()
     new_video_frames = []
     for frame, pose, camK in zip(video_frames, poses, camKs):
         track_RT = torch.as_tensor(pose, dtype=torch.float32)

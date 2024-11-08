@@ -21,7 +21,27 @@ def get_size_from_mesh(mesh: trimesh.Trimesh) -> torch.Tensor:
     size = max_coords - min_coords
     return size
 
-
+def get_bbox_from_size(size: torch.Tensor) -> torch.Tensor:
+    """
+    Calculate the bounding box of the object from the size.
+    Assumes the object is centered at the origin.
+    Args:
+        size: The size of the object.
+    Returns:
+        The bounding box of the object.
+    """
+    ex, ey, ez = size / 2
+    obj_bbox3d = torch.tensor([
+        [-ex, -ey, -ez],  # Front-top-left corner
+        [ex, -ey, -ez],  # Front-top-right corner
+        [ex, ey, -ez],  # Front-bottom-right corner
+        [-ex, ey, -ez],  # Front-bottom-left corner
+        [-ex, -ey, ez],  # Back-top-left corner
+        [ex, -ey, ez],  # Back-top-right corner
+        [ex, ey, ez],  # Back-bottom-right corner
+        [-ex, ey, ez],  # Back-bottom-left corner
+    ])
+    return obj_bbox3d
 def get_diameter_from_mesh(mesh: trimesh.Trimesh) -> float:
     """
     Calculate the diameter of the object from the mesh.

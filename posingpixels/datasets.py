@@ -13,7 +13,7 @@ import glob
 from tqdm import tqdm
 from posingpixels.utils.offscreen_renderer import ModelRendererOffscreen
 import trimesh
-from posingpixels.utils.meshes import get_diameter_from_mesh
+from posingpixels.utils.meshes import get_bbox_from_size, get_diameter_from_mesh, get_size_from_mesh
 from posingpixels.segmentation import segment
 
 
@@ -57,6 +57,8 @@ class YCBinEOATDataset(torch.utils.data.Dataset):
         self.obj_path = os.path.join(self.object_dir, "textured_simple.obj")
         mesh = self.get_mesh()
         self.obj_diameter = get_diameter_from_mesh(mesh)
+        self.obj_size = get_size_from_mesh(mesh)
+        self.bbox = get_bbox_from_size(self.obj_size)
         self.renderer = ModelRendererOffscreen(self.K, self.H, self.W)
         self.cad_rgb_dir = os.path.join(self.video_dir, "cad_rgb")
         self.cad_depth_dir = os.path.join(self.video_dir, "cad_depth")

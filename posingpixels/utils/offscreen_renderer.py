@@ -7,13 +7,8 @@
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 import numpy as np
 import pyrender
-import numpy as np
-import pyrender
 from tqdm import tqdm
-import trimesh
 from multiprocessing import Pool
-from typing import List, Tuple, Optional
-import copy
 
 cvcam_in_glcam = np.array([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
 
@@ -54,18 +49,18 @@ class ModelRendererOffscreen:
             self.scene.remove_node(mesh_node)
 
         return color, depth
-    
+
     def render_batch(self, ob_in_cvcam, mesh=None, num_workers=4):
         # Prepare arguments for parallel processing
-        args = [(pose, mesh, self.K, self.H, self.W, self.zfar) 
-                for pose in ob_in_cvcam]
-        
+        args = [(pose, mesh, self.K, self.H, self.W, self.zfar) for pose in ob_in_cvcam]
+
         # Run parallel rendering with progress bar
         results = _imap_unordered_bar(_render_single, args, num_workers=num_workers)
-        
+
         # Separate colors and depths
         colors, depths = zip(*results)
         return list(colors), list(depths)
+
 
 def _render_single(args):
     """Helper function for parallel rendering."""
@@ -73,18 +68,19 @@ def _render_single(args):
     renderer = ModelRendererOffscreen(cam_K, H, W, zfar)
     return renderer.render(mesh, pose)
 
+
 def _imap_unordered_bar(func, args, total=None, num_workers=4):
-        """
-        Wrapper function to add tqdm to imap_unordered.
-        """
-        if total is None:
-            total = len(args)
-        
-        with Pool(processes=num_workers) as pool:
-            results = []
-            with tqdm(total=total, desc="Rendering") as pbar:
-                for result in pool.imap_unordered(func, args):
-                    results.append(result)
-                    pbar.update()
-            
-            return results
+    """
+    Wrapper function to add tqdm to imap_unordered.
+    """
+    if total is None:
+        total = len(args)
+
+    with Pool(processes=num_workers) as pool:
+        results = []
+        with tqdm(total=total, desc="Rendering") as pbar:
+            for result in pool.imap_unordered(func, args):
+                results.append(result)
+                pbar.update()
+
+        return results

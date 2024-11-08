@@ -1,5 +1,6 @@
 from typing import List, Optional, Tuple
 import numpy as np
+import torch
 from gaussian_object.gaussian_model import GaussianModel
 
 
@@ -339,3 +340,78 @@ def interpolate_poses(R_start, T_start, R_end, T_end, num_steps) -> List[np.ndar
         interpolated_poses.append(pose)
 
     return interpolated_poses
+
+def apply_pose_to_points_batch(
+    points: torch.Tensor, R: torch.Tensor, T: torch.Tensor
+) -> torch.Tensor:
+    """
+    Apply poses to multiple sets of points in batch using PyTorch.
+    
+    Parameters
+    ----------
+    points : torch.Tensor
+        The points to transform. Shape: (B, N, 3), where:
+        - B is the batch size
+        - N is the number of points per set
+    R : torch.Tensor
+        The rotation matrices. Shape: (B, 3, 3)
+    T : torch.Tensor
+        The translation vectors. Shape: (B, 3)
+        
+    Returns
+    -------
+    torch.Tensor
+        The transformed points. Shape: (B, N, 3)
+    """
+    # Reshape T to (B, 1, 3) for broadcasting with points
+    T = T.unsqueeze(1)
+    
+    # Option 1: Using torch.einsum for clarity and efficiency
+    # rotated = torch.einsum('bij,bkj->bki', R, points)
+    
+    # Option 2: Using batch matrix multiplication
+    # Transpose points to (B, 3, N)
+    points_T = points.transpose(1, 2)
+    # Perform batch matrix multiplication and transpose back
+    rotated = torch.bmm(R, points_T).transpose(1, 2)
+    
+    # Add translation (broadcasting handles the addition)
+    return rotated + T
+
+def render_points_in_2d_batch(points: torch.Tensor, K: torch.Tensor) -> torch.Tensor:
+    """
+    Render multiple sets of 3D points in 2D using camera matrices.
+    
+    Parameters
+    ----------
+    points : torch.Tensor
+        The 3D points. Shape: (B, N, 3), where:
+        - B is the batch size
+        - N is the number of points per set
+    K : torch.Tensor
+        The camera matrices. Shape can be either:
+        - (B, 3, 3) for batch of different cameras
+        - (3, 3) for single camera applied to all batches
+        
+    Returns
+    -------
+    torch.Tensor
+        The rendered 2D points. Shape: (B, N, 2)
+    """
+    # Handle single camera matrix case
+    if K.dim() == 2:
+        K = K.unsqueeze(0).expand(points.size(0), -1, -1)
+    
+    # Transpose points to (B, 3, N)
+    points_T = points.transpose(1, 2)
+    
+    # Perform batch matrix multiplication
+    pixels = torch.bmm(K, points_T)
+    
+    # Normalize by dividing by z-coordinate
+    # Get z coordinates with shape (B, 1, N)
+    z = pixels[:, 2:3, :]
+    normalized = pixels[:, :2, :] / z
+    
+    # Return with shape (B, N, 2)
+    return normalized.transpose(1, 2)

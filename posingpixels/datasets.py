@@ -88,7 +88,7 @@ class YCBinEOATDataset(torch.utils.data.Dataset):
         return np.array([self.get_gt_pose(i) for i in range(len(self))])
         
 
-    def get_gt_pose(self, idx: int) -> Optional[np.ndarray]:
+    def get_gt_pose(self, idx: int) -> np.ndarray:
         file = self.gt_pose_files[idx]
         return np.loadtxt(file).reshape(4, 4)
 

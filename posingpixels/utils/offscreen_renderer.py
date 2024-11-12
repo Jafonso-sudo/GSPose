@@ -43,7 +43,7 @@ class ModelRendererOffscreen:
             mesh = pyrender.Mesh.from_trimesh(mesh, smooth=False)
             mesh_node = self.scene.add(
                 mesh, pose=np.eye(4), name="ob"
-            )  # Object pose parent is cam
+        )  # Object pose parent is cam
         color, depth = self.r.render(self.scene)  # depth: float
         if mesh is not None:
             self.scene.remove_node(mesh_node)

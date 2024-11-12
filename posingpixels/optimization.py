@@ -1,3 +1,4 @@
+from typing import Optional
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -16,7 +17,8 @@ class MultiTimestampRenderPoseModel6D(nn.Module):
             identity_rotation_6d = torch.tensor([[1.0, 0.0, 0.0, 0.0, 1.0, 0.0]], device=self.device)
             self.rotations_6d = nn.Parameter(identity_rotation_6d.repeat(num_timestamps, 1))
         else:
-            initial_R = torch.tensor(initial_R, device=self.device)
+            if not torch.is_tensor:
+                initial_R = torch.tensor(initial_R, device=self.device)
             if initial_R.dim() == 2:
                 initial_R = initial_R.unsqueeze(0).repeat(num_timestamps, 1, 1)
             self.rotations_6d = nn.Parameter(matrix_to_rotation_6d(initial_R))
@@ -24,7 +26,8 @@ class MultiTimestampRenderPoseModel6D(nn.Module):
         if initial_T is None:
             self.translation_vectors = nn.Parameter(torch.zeros(num_timestamps, 3, device=self.device))
         else:
-            initial_T = torch.tensor(initial_T, device=self.device)
+            if not torch.is_tensor:
+                initial_T = torch.tensor(initial_T, device=self.device)
             if initial_T.dim() == 1:
                 initial_T = initial_T.unsqueeze(0).repeat(num_timestamps, 1)
             self.translation_vectors = nn.Parameter(initial_T)
@@ -75,6 +78,7 @@ def render_train_model(
     model,
     camKs,
     target_points,
+    weights: Optional[torch.Tensor] = None,
     num_epochs=2000,
     warmup_steps=100,
     max_lr=5e-3,
@@ -100,6 +104,8 @@ def render_train_model(
         reconstruction_criterion = nn.MSELoss(reduction='none')
     elif reconstruction_loss == 'l1':
         reconstruction_criterion = nn.L1Loss(reduction='none')
+    elif reconstruction_loss == 'huber':
+        reconstruction_criterion = nn.HuberLoss(reduction='none')
     else:
         raise ValueError(f"Unknown reconstruction loss: {reconstruction_loss}")
 
@@ -107,12 +113,15 @@ def render_train_model(
     
     if return_all:
         rendered_points_history = []
+        
+    if weights is not None:
+        weights = torch.ones_like(target_points)
 
     for epoch in tqdm.tqdm(range(num_epochs)):
         optimizer.zero_grad()
         rendered_points = model(camKs)
         
-        reconstruction_loss = reconstruction_criterion(rendered_points[:, :, :2], target_points)
+        reconstruction_loss = reconstruction_criterion(rendered_points[:, :, :2], target_points) * weights
         if reconstruction_loss_clip is not None and epoch > reconstruction_loss_clip_start_epoch:
             reconstruction_loss = torch.clamp(reconstruction_loss, max=reconstruction_loss_clip)
         reconstruction_loss = torch.mean(reconstruction_loss)

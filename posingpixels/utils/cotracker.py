@@ -4,6 +4,8 @@ import numpy as np
 
 from typing import Tuple
 
+import torch
+
 from posingpixels.utils.geometry import apply_pose_to_points, render_points_in_2d
 
 
@@ -50,7 +52,7 @@ def get_ground_truths(
     # Get the depth values posed_3d_points[:, 2] at the 2D coordinates gt_coords
     gt_depth = depth[gt_coords[:, 1].astype(int), gt_coords[:, 0].astype(int)]
     # Calculate visibility based on depth values
-    gt_visibility = gt_depth + 0.01 > posed_3d_points[:, 2]
+    gt_visibility = np.abs(gt_depth - posed_3d_points[:, 2]) < 0.01
     # Apply prob_mask
     gt_visibility = (
         gt_visibility
@@ -58,7 +60,6 @@ def get_ground_truths(
     )
 
     return gt_coords, gt_visibility
-
 
 def scale_by_crop(points, bboxes, scaling_factors):
     """
@@ -104,6 +105,44 @@ def unscale_by_crop(points, bboxes, scaling_factors):
     
     return points
 
+def get_tracks_outside_mask(pred_tracks: torch.Tensor, masks: torch.Tensor) -> torch.Tensor:
+    """
+    Find indices of track points that fall on pixels where the mask is False for each timestamp.
+    
+    Args:
+        pred_tracks: Tensor of shape (T, N, 2) containing pixel coordinates for each point at each timestamp
+        masks: Tensor of shape (T, H, W) containing boolean values for each pixel at each timestamp
+    
+    Returns:
+        Tensor of shape (M, 2) containing (timestamp, point_idx) pairs where M is the number of
+        track points that fall outside their corresponding timestamp's mask
+    """
+    T, N, _ = pred_tracks.shape
+    _, H, W = masks.shape
+    
+    # Convert track coordinates to integers for indexing
+    track_coords = pred_tracks.round().long()
+    
+    # Clamp coordinates to valid image dimensions
+    track_coords[..., 0] = torch.clamp(track_coords[..., 0], 0, W-1)
+    track_coords[..., 1] = torch.clamp(track_coords[..., 1], 0, H-1)
+    
+    # Create time indices for all points
+    time_indices = torch.arange(T, device=pred_tracks.device).unsqueeze(1).expand(T, N)
+    
+    # Get mask values for each track point at its corresponding timestamp
+    track_mask_values = masks[
+        time_indices,
+        track_coords[..., 1],  # y coordinates
+        track_coords[..., 0]   # x coordinates
+    ]  # Shape: (T, N)
+    
+    # Find indices where track points are outside the mask (mask is False)
+    unmasked_indices = torch.where(~track_mask_values)
+    
+    # Stack the indices to get (timestamp, point_idx) pairs
+    return torch.stack(unmasked_indices, dim=1)
+
 def visualize_results(
     video,
     pred_tracks,
@@ -112,6 +151,7 @@ def visualize_results(
     save_dir,
     num_of_main_queries=None,
     filename="video",
+    threshold=0.6,
 ):
     if num_of_main_queries is None:
         num_of_main_queries = pred_tracks.shape[2]
@@ -119,6 +159,6 @@ def visualize_results(
     vis.visualize(
         video,
         pred_tracks[:, :, :num_of_main_queries, :],
-        (pred_visibility * pred_confidence > 0.6)[:, :, :num_of_main_queries],
+        (pred_visibility * pred_confidence > threshold)[:, :, :num_of_main_queries],
         filename=filename,
     )

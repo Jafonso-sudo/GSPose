@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple
+from typing import List, Literal, Optional, Tuple
 import numpy as np
 import torch
 from gaussian_object.gaussian_model import GaussianModel
@@ -340,6 +340,44 @@ def interpolate_poses(R_start, T_start, R_end, T_end, num_steps) -> List[np.ndar
         interpolated_poses.append(pose)
 
     return interpolated_poses
+
+def do_axis_rotation(R: np.ndarray, S: int, axis: Literal['x', 'y', 'z']) -> np.ndarray:
+    # Ensure the input rotation matrix is a NumPy array
+    R = np.asarray(R, dtype=np.float32)
+
+    # Generate the angles for each frame
+    theta_increments = np.linspace(0, 2 * np.pi, S, endpoint=False)
+
+    # Compute cos and sin values for each angle
+    cos_vals = np.cos(theta_increments)
+    sin_vals = np.sin(theta_increments)
+
+    # Create a batch of rotation matrices around the z-axis
+    R_thetas = np.zeros((S, 3, 3), dtype=np.float32)
+    if axis == 'x':
+        R_thetas[:, 1, 1] = cos_vals
+        R_thetas[:, 1, 2] = -sin_vals
+        R_thetas[:, 2, 1] = sin_vals
+        R_thetas[:, 2, 2] = cos_vals
+        R_thetas[:, 0, 0] = 1
+
+    if axis == 'y':
+        R_thetas[:, 0, 0] = cos_vals
+        R_thetas[:, 0, 2] = sin_vals
+        R_thetas[:, 2, 0] = -sin_vals
+        R_thetas[:, 2, 2] = cos_vals
+        R_thetas[:, 1, 1] = 1
+        
+    if axis == 'z':
+        R_thetas[:, 0, 0] = cos_vals
+        R_thetas[:, 0, 1] = -sin_vals
+        R_thetas[:, 1, 0] = sin_vals
+        R_thetas[:, 1, 1] = cos_vals
+        R_thetas[:, 2, 2] = 1 
+
+    # Perform batched matrix multiplication of R with each R_z using einsum
+    return np.einsum('ij,kjl->kil', R, R_thetas)
+    
 
 def apply_pose_to_points_batch(
     points: torch.Tensor, R: torch.Tensor, T: torch.Tensor

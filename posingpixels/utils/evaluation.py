@@ -12,6 +12,55 @@ import torch
 
 from posingpixels.cotracker import CoMeshTracker
 from posingpixels.utils.cotracker import get_ground_truths, scale_by_crop
+from posingpixels.utils.geometry import apply_pose_to_points
+
+def compute_add_metrics(
+    model_3D_pts: np.ndarray,
+    diameter: float,
+    pose_pred: np.ndarray,
+    pose_target: np.ndarray,
+    percentage: float = 0.1,
+    return_error: bool = False,
+    syn: bool = False,
+) -> Union[bool, float]:
+    """Computes the ADD metric.
+    Args:
+        model_3D_pts: A numpy array of shape [N, 3] representing the 3D points of
+            the model.
+        diameter: The diameter of the model.
+        pose_pred: A numpy array of shape [4, 4] representing the predicted pose.
+        pose_target: A numpy array of shape [4, 4] representing the target pose.
+        percentage: The percentage of the diameter to use as the threshold.
+        return_error: If True, returns the error instead of a boolean.
+        syn: If True, uses a cKDTree to compute the mean distance.
+        model_unit: The unit of the model.
+    Returns:
+        The ADD metric if return_error is False, otherwise the error.
+    """
+    from scipy import spatial
+
+    if pose_pred.shape[0] == 4:
+        pose_pred = pose_pred[:3]
+    if pose_target.shape[0] == 4:
+        pose_target = pose_target[:3]
+
+    diameter_thres = diameter * percentage
+    model_pred = apply_pose_to_points(model_3D_pts, pose_pred[:3, :3], pose_pred[:3, 3])
+    model_target = apply_pose_to_points(model_3D_pts, pose_target[:3, :3], pose_target[:3, 3])
+
+    if syn:
+        mean_dist_index = spatial.cKDTree(model_pred)
+        mean_dist, _ = mean_dist_index.query(model_target, k=1)
+        mean_dist = np.mean(mean_dist)
+    else:
+        mean_dist = np.mean(np.linalg.norm(model_pred - model_target, axis=-1))
+
+    if return_error:
+        return mean_dist
+    elif mean_dist < diameter_thres:
+        return True
+    else:
+        return False
 
 
 def compute_tapvid_metrics(

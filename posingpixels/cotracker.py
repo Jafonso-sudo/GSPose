@@ -283,6 +283,9 @@ class CoMeshTracker:
         self.queries_sizes = [len(q) for q in all_query_2d_points]
         self.query_to_point = np.array(query_to_point)
         self.num_query_points = len(self.query_2d_points)
+        tensor_query_to_point = torch.tensor(self.query_to_point)
+        self.query_indexes = torch.nonzero(tensor_query_to_point)
+        self.query_indexes = self.query_indexes[:, 1].flatten()
 
         # Add support grid
         if self.support_grid is not None:
@@ -299,12 +302,13 @@ class CoMeshTracker:
 
     def run_cotracker(self):
         # Prepare CoTracker initialization
-        cotracker_init_coords = np.zeros((self.limit, self.num_object_points, 2))
-        cotracker_init_coords[: self.interpolation_steps] = self.init_coords
-        cotracker_init_coords[self.interpolation_steps :, :] = self.init_coords[-1, :]
-        cotracker_init_vis = np.zeros((self.limit, self.num_object_points))
-        cotracker_init_vis[: self.interpolation_steps] = (self.init_vis - 0.5) * 40
-        cotracker_init_confidence = np.zeros((self.limit, self.num_object_points))
+        
+        cotracker_init_coords = np.zeros((self.limit, self.num_query_points, 2))
+        cotracker_init_coords[: self.interpolation_steps] = self.init_coords[:, self.query_indexes]
+        cotracker_init_coords[self.interpolation_steps :, :] = self.init_coords[-1, self.query_indexes]
+        cotracker_init_vis = np.zeros((self.limit, self.num_query_points))
+        cotracker_init_vis[: self.interpolation_steps] = (self.init_vis[:, self.query_indexes] - 0.5) * 40
+        cotracker_init_confidence = np.zeros((self.limit, self.num_query_points))
         cotracker_init_confidence[: self.interpolation_steps, :] = 20
 
         cotracker_init_coords = (
@@ -316,12 +320,21 @@ class CoMeshTracker:
         cotracker_init_confidence = (
             torch.tensor(cotracker_init_confidence).float().to(self.device)[None]
         )
+        if not self.better_initialization:
+            cotracker_init_coords = None
+            cotracker_init_vis = None
+            cotracker_init_confidence = None
+            
         if not self.offline:
             tracks, visibility, confidence = get_online_cotracker_predictions(
                 self.cotracker_input_dir,
                 grid_size=0,
                 queries=self.query_2d_points,
                 downcast=self.downcast,
+                init_coords=cotracker_init_coords,
+                init_vis=cotracker_init_vis,
+                init_confidence=cotracker_init_confidence,
+                init_length=self.interpolation_steps
             )
         else:
             tracks, visibility, confidence = get_offline_cotracker_predictions(
@@ -332,6 +345,7 @@ class CoMeshTracker:
                 init_coords=cotracker_init_coords,
                 init_vis=cotracker_init_vis,
                 init_confidence=cotracker_init_confidence,
+                init_length=self.interpolation_steps,
                 downcast=self.downcast,
             )
             
@@ -361,6 +375,7 @@ def get_offline_cotracker_predictions(
     init_coords=None,
     init_vis=None,
     init_confidence=None,
+    init_length=None,
 ):
     with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=downcast):
         queries_torch = (
@@ -381,6 +396,7 @@ def get_offline_cotracker_predictions(
             init_coords=init_coords,
             init_vis=init_vis,
             init_confidence=init_confidence,
+            init_length=init_length
         )  # B T N 2,  B T N 1, B T N 1
     return pred_tracks, pred_visibility, confidence
 
@@ -392,6 +408,10 @@ def get_online_cotracker_predictions(
     step=8,
     downcast=False,
     device=torch.device("cuda"),
+    init_coords=None,
+    init_vis=None,
+    init_confidence=None,
+    init_length=None,
 ):
     offline = step != 8
     if queries is not None and grid_size:
@@ -412,12 +432,113 @@ def get_online_cotracker_predictions(
             window_len=step * 2, offline=offline
         ).to(device)
         for batch in tqdm(batch_iterator, desc="Processing batches"):
-            first_img = batch[0][0]
             pred_tracks, pred_visibility, confidence = cotracker_online(
                 video_chunk=batch,
                 is_first_step=is_first_step,
                 grid_size=grid_size,
                 queries=queries_torch,
+                init_coords=init_coords,
+                init_vis=init_vis,
+                init_confidence=init_confidence,
+                init_length=init_length,
             )
             is_first_step = False
     return pred_tracks, pred_visibility, confidence
+
+def get_most_confident_views(pred_confidence: torch.Tensor, query_to_point: torch.Tensor, num_points: int, queries_lengths: List[int]) -> torch.Tensor:
+    """
+    Find the query indices with highest confidence scores for each point at each timestamp.
+    
+    Args:
+        pred_confidence: Tensor of shape (T, Q) containing confidence scores for each query at each timestamp
+        query_to_point: Tensor of shape (Q,) mapping each query index to its corresponding point index
+        num_points: Number of unique points (N)
+        queries_lengths: List of lengths of each query sequence
+    
+    Returns:
+        Tensor of shape (T, N) containing the query indices with highest confidence for each point at each timestamp
+    """
+    T, Q = pred_confidence.shape
+    V = len(queries_lengths)
+    
+    query_to_view = torch.zeros(Q, device=pred_confidence.device).int()
+    prev = 0
+    for i, length in enumerate(queries_lengths):
+        query_to_view[prev:prev + length] = i
+        prev += length
+    
+    # Step 1: Find the most confident view for each timestamp
+    # Create a mask of shape (Q, V) where mask[q, v] = 1 if query q belongs to view v
+    query_view_mask = torch.zeros(Q, V, device=pred_confidence.device).int()
+    query_indices = torch.arange(Q, device=pred_confidence.device).int()
+    query_view_mask[query_indices, query_to_view] = 1
+    
+    # Calculate average confidence per view at each timestamp
+    # Shape: (T, Q, 1)
+    confidence_expanded = pred_confidence.unsqueeze(-1)
+    # Shape: (T, Q, V)
+    view_confidence = confidence_expanded * query_view_mask.unsqueeze(0)
+    
+    # Get the sum and count of confidence scores per view
+    view_conf_sum = view_confidence.sum(dim=1)  # Shape: (T, V)
+    view_conf_count = query_view_mask.sum(dim=0)  # Shape: (V,)
+    
+    # Calculate average confidence per view
+    view_conf_avg = view_conf_sum / view_conf_count  # Shape: (T, V)
+    
+    # Get the most confident view for each timestamp
+    best_view_indices = torch.argmax(view_conf_avg, dim=1)  # Shape: (T,)
+    
+    # Step 2: Create a mask for queries belonging to the best view at each timestamp
+    best_view_mask = query_view_mask[:, best_view_indices]  # Shape: (1, T, Q)
+    
+    # Step 3: Find the most confident queries for points in the best view
+    # Create a mask for queries belonging to each point
+    query_point_mask = torch.zeros(Q, num_points, device=pred_confidence.device)
+    query_point_mask[query_indices, query_to_point] = 1
+    
+    # Mask confidence scores for queries not in the best view
+    masked_confidence = pred_confidence.unsqueeze(-1) * query_point_mask.unsqueeze(0)  # Shape: (T, Q, N)
+    masked_confidence = masked_confidence * best_view_mask.T.unsqueeze(-1)
+    
+    # Find the query indices with maximum confidence for each point
+    masked_confidence[masked_confidence == 0] = float('-inf')
+    best_query_indices = torch.argmax(masked_confidence, dim=1)  # Shape: (T, N)
+    
+    return best_view_indices, best_view_mask, best_query_indices
+
+def get_most_confident_queries(pred_confidence: torch.Tensor, query_to_point: torch.Tensor, num_points: int) -> torch.Tensor:
+    """
+    Find the query indices with highest confidence scores for each point at each timestamp.
+    
+    Args:
+        pred_confidence: Tensor of shape (T, Q) containing confidence scores for each query at each timestamp
+        query_to_point: Tensor of shape (Q,) mapping each query index to its corresponding point index
+        num_points: Number of unique points (N)
+    
+    Returns:
+        Tensor of shape (T, N) containing the query indices with highest confidence for each point at each timestamp
+    """
+    T, Q = pred_confidence.shape
+    
+    # Create a mask of shape (Q, N) where mask[q, p] = 1 if query q corresponds to point p
+    query_point_mask = torch.zeros(Q, num_points, device=pred_confidence.device)
+    query_indices = torch.arange(Q, device=pred_confidence.device)
+    query_point_mask[query_indices, query_to_point] = 1
+    
+    # Reshape confidence scores to (T, Q, 1) for broadcasting
+    confidence_expanded = pred_confidence.unsqueeze(-1)  # Shape: (T, Q, 1)
+    
+    # Broadcast confidence scores across points and mask out irrelevant queries
+    # Shape: (T, Q, N)
+    masked_confidence = confidence_expanded * query_point_mask.unsqueeze(0)
+    
+    # Find the query indices with maximum confidence for each point
+    # Use a very low value for masking to ensure masked values aren't selected
+    masked_confidence[masked_confidence == 0] = float('-inf')
+    
+    # Get the query indices with maximum confidence for each point at each timestamp
+    # Shape: (T, N)
+    best_query_indices = torch.argmax(masked_confidence, dim=1)
+    
+    return best_query_indices

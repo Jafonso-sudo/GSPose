@@ -241,6 +241,7 @@ def overlay_bounding_box_on_video(
     camKs: np.ndarray,
     poses: np.ndarray,
     color=(0, 255, 0),
+    linewidth=2,
 ) -> np.ndarray:
     """
     Overlay the bounding box of the object on a video.
@@ -271,7 +272,7 @@ def overlay_bounding_box_on_video(
             (track_bbox_KRT[:, :2] / track_bbox_KRT[:, 2:3]).type(torch.int64).numpy()
         )
         track_bbox3d_img = gs_utils.draw_3d_bounding_box(
-            frame.copy(), track_bbox_pts, color=color, linewidth=5
+            frame.copy(), track_bbox_pts, color=color, linewidth=linewidth
         )
         new_video_frames.append(track_bbox3d_img)
 

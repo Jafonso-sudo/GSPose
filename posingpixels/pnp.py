@@ -27,7 +27,8 @@ class PnPSolver(ABC):
         Returns:
             torch.Tensor: The transformed points, of shape (N, 3).
         """
-        return torch.matmul(points, R.transpose(1, 2)) + T
+        transformed = torch.matmul(points, R.transpose(1, 2))
+        return transformed + T.unsqueeze(1)
     
     @staticmethod
     def render_points(points, K):
@@ -41,7 +42,9 @@ class PnPSolver(ABC):
         Returns:
             torch.Tensor: The projected points, of shape (N, 2).
         """
-        return torch.matmul(points, K.transpose(1, 2)) / points[:, 2:]
+        K = K.unsqueeze(0) if len(K.shape) == 2 else K
+        projected = torch.matmul(points, K.transpose(1, 2))
+        return projected / points[:, :, 2:3]
     
     def pose_and_render_points(self, R, T, K=None, points=None):
         """
@@ -281,12 +284,15 @@ def render_train_model(
         reconstruction_criterion = nn.HuberLoss(reduction='none')
     else:
         raise ValueError(f"Unknown reconstruction loss: {reconstruction_loss}")
-
+    
     losses = []
     
-    if return_all:
-        rendered_points_history = []
-        
+    all_rotations = []
+    all_translations = []
+    all_rotations.append(model.rotations_6d.detach().clone())
+    all_translations.append(model.translation_vectors.detach().clone())
+    
+
     if weights is None:
         weights = torch.ones_like(target_points)
     elif len(weights.shape) == 2:
@@ -307,15 +313,9 @@ def render_train_model(
         total_loss.backward()
         optimizer.step()
         lr_scheduler.step()
-
-        if return_all:
-            rendered_points_history.append(rendered_points.detach())
-
-        # if verbose and epoch % 100 == 0:
-        #     print(f"Epoch {epoch}: Total Loss = {total_loss.item()}, "
-        #           f"Reconstruction Loss = {reconstruction_loss.item()}, "
-        #           f"Consistency Loss = {consistency_loss.item()}")
-
+        
+        all_rotations.append(model.rotations_6d.detach().clone())
+        all_translations.append(model.translation_vectors.detach().clone())
         losses.append(total_loss.item())
         if epoch > early_stop_min_steps:
             loss_grads = torch.tensor(losses[1:]) - torch.tensor(losses[:-1])
@@ -325,10 +325,4 @@ def render_train_model(
                     print(f"Early stopping at epoch {epoch}")
                 break
 
-    with torch.no_grad():
-        final_rendered_points = model(camKs)
-        if return_all:
-            rendered_points_history.append(final_rendered_points)
-            rendered_points_history = torch.stack(rendered_points_history, dim=0)
-
-    return model, rendered_points_history if return_all else final_rendered_points
+    return all_rotations, all_translations, losses

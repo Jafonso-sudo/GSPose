@@ -17,7 +17,7 @@ from posingpixels.utils.geometry import (
     interpolate_poses,
 )
 from posingpixels.alignment import get_safe_query_points
-from typing import Optional
+from typing import List, Optional
 from posingpixels.segmentation import get_bbox_from_mask, process_image_crop
 from posingpixels.utils.cotracker import scale_by_crop
 

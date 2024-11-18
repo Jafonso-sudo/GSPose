@@ -370,6 +370,15 @@ def draw_3d_bounding_box(rgb_image, projected_bbox, color, linewidth=3):
         start_point = tuple(map(int, start_point))
         end_point = tuple(map(int, end_point))
         cv2.line(image_with_bbox, start_point, end_point, color, linewidth)  # Green color
+    # Draw the axis thicker with standard colors
+    axis = [(0, 1), (0, 3), (0, 4)]
+    colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255)]
+    for ax, color in zip(axis, colors):
+        start_point = projected_bbox[ax[0]]
+        end_point = projected_bbox[ax[1]]
+        start_point = tuple(map(int, start_point))
+        end_point = tuple(map(int, end_point))
+        cv2.line(image_with_bbox, start_point, end_point, color, linewidth * 2)
 
 #     return cv2.cvtColor(image_with_bbox, cv2.COLOR_BGR2RGB)
     return image_with_bbox

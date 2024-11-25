@@ -13,7 +13,11 @@ import glob
 from tqdm import tqdm
 from posingpixels.utils.offscreen_renderer import ModelRendererOffscreen
 import trimesh
-from posingpixels.utils.meshes import get_bbox_from_size, get_diameter_from_mesh, get_size_from_mesh
+from posingpixels.utils.meshes import (
+    get_bbox_from_size,
+    get_diameter_from_mesh,
+    get_size_from_mesh,
+)
 from posingpixels.segmentation import segment
 
 
@@ -32,7 +36,7 @@ class YCBinEOATDataset(torch.utils.data.Dataset):
 
     videoname_to_sam_prompt = {"mustard0": [(124, 292), (135, 304), (156, 336)]}
 
-    def __init__(self, video_dir: str, object_dir: str):
+    def __init__(self, video_dir: str, object_dir: str, use_cad_rgb: bool = False):
         # Video
         self.video_dir = video_dir
         self.video_rgb_dir = os.path.join(self.video_dir, "rgb")
@@ -51,7 +55,11 @@ class YCBinEOATDataset(torch.utils.data.Dataset):
                 prompts=self.videoname_to_sam_prompt[self.video_name],
             )
         self.mask_files = sorted(glob.glob(f"{self.masks_dir}/*.png"))
-
+        
+        # Video
+        self.max_frames = len(self.rgb_video_files)
+        self.start_frame = 0
+        self.end_frame = self.max_frames
         # Object
         self.object_dir = object_dir
         self.obj_path = os.path.join(self.object_dir, "textured_simple.obj")
@@ -66,12 +74,19 @@ class YCBinEOATDataset(torch.utils.data.Dataset):
         self.cad_rgb_files = sorted(glob.glob(f"{self.cad_rgb_dir}/*.png"))
         self.cad_depth_files = sorted(glob.glob(f"{self.cad_depth_dir}/*.tiff"))
 
+        # Experiments
+        self.use_cad_rgb = use_cad_rgb
+        
+    def reset_frame_range(self):
+        self.start_frame = 0
+        self.end_frame = self.max_frames
+
     @property
     def video_name(self):
         return os.path.basename(self.video_dir)
 
     def __len__(self):
-        return len(self.rgb_video_files)
+        return self.end_frame - self.start_frame
 
     def get_mesh(self) -> trimesh.Trimesh:
         return trimesh.load_mesh(self.obj_path)
@@ -85,40 +100,53 @@ class YCBinEOATDataset(torch.utils.data.Dataset):
         return self.H, self.W
 
     def get_gt_poses(self) -> np.ndarray:
-        return np.array([self.get_gt_pose(i) for i in range(len(self))])
-        
+        return np.array([self.get_gt_pose(i) for i in range(len(self))])[
+            self.start_frame : self.end_frame
+        ]
 
     def get_gt_pose(self, idx: int) -> np.ndarray:
+        idx -= self.start_frame
         file = self.gt_pose_files[idx]
         return np.loadtxt(file).reshape(4, 4)
 
     def get_rgb(self, idx: int) -> np.ndarray:
+        idx -= self.start_frame
+        if self.use_cad_rgb:
+            return self.get_cad_rgb(idx)
         return cv2.cvtColor(
             cv2.imread(self.rgb_video_files[idx], cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB
         )
 
     def get_cad_rgb(self, idx: int) -> np.ndarray:
+        idx -= self.start_frame
         return cv2.cvtColor(
             cv2.imread(self.cad_rgb_files[idx], cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB
         )
 
     def get_mask(self, idx: int) -> np.ndarray:
+        idx -= self.start_frame
         return cv2.imread(self.mask_files[idx], cv2.IMREAD_GRAYSCALE) / 255
 
     def get_gt_mask(self, idx: int) -> np.ndarray:
+        idx -= self.start_frame
         return cv2.imread(self.gt_mask_files[idx], cv2.IMREAD_GRAYSCALE)
 
     def get_cad_depth(self, idx: int) -> np.ndarray:
+        idx -= self.start_frame
         depth_image = Image.open(self.cad_depth_files[idx])
 
         return np.array(depth_image).astype(np.float32)
 
     def render_mesh_at_pose(
         self, pose: Optional[np.ndarray] = None, idx: Optional[int] = None
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        if idx is not None:
+            idx -= self.start_frame
         assert (pose is None) != (idx is None)
         pose = self.get_gt_pose(idx) if pose is None else pose
-        return self.renderer.render(pose, self.get_mesh())
+        rgb, depth = self.renderer.render(pose, self.get_mesh())
+        alpha = (depth > 0).astype(float)
+        return rgb, depth, alpha
 
     def get_canonical_pose(self):
         canonical_pose = np.eye(4)
@@ -136,7 +164,7 @@ class YCBinEOATDataset(torch.utils.data.Dataset):
             os.path.exists(self.cad_rgb_dir)
             and os.path.exists(self.cad_depth_dir)
             and len(os.listdir(self.cad_rgb_dir))
-            == len(self)
+            == self.max_frames
             == len(os.listdir(self.cad_depth_dir))
         ):
             return
@@ -153,12 +181,12 @@ class YCBinEOATDataset(torch.utils.data.Dataset):
             real_mask = self.get_mask(i)
             if (pose_i := self.get_gt_pose(i)) is not None:
                 pose = pose_i
-            rgb, depth = self.render_mesh_at_pose(pose=pose)
+            rgb, depth, _ = self.render_mesh_at_pose(pose=pose)
             cv2.imwrite(
                 os.path.join(self.cad_rgb_dir, f"{i:05d}.png"),
                 cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR),
             )
-            
+
             # overlap
             overlap = cv2.addWeighted(real_rgb, 0.5, rgb, 0.5, 0)
 

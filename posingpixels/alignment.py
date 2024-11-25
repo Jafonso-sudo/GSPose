@@ -275,7 +275,9 @@ def get_safe_query_points(
         if object:
             object_pointcloud = get_gaussian_splat_pointcloud(object)
         if mesh:
-            object_pointcloud = get_points_pointcloud(mesh.vertices, color=np.array([1, 0, 0]))
+            object_pointcloud = get_points_pointcloud(
+                mesh.vertices, color=np.array([1, 0, 0])
+            )
 
         plot_pointclouds(
             {"Object": object_pointcloud, "Intersections": intersections_pointcloud},
@@ -301,3 +303,102 @@ def get_safe_query_points(
         ],
         axis=1,
     )
+
+
+class CanonicalPointSampler:
+    def __init__(
+        self,
+        min_pixel_distance: int = 15,
+        threshold: float = 0.9,
+        alpha_margin: int = 10,
+        max_alpha_change: float = 0.01,
+        depth_margin: int = 6,
+        depth_change_threshold: float = 0.01,
+    ):
+        """
+        Args:
+            min_pixel_distance (int): Minimum distance between points in pixels.
+            threshold (float): Minimum alpha value for a point to be considered.
+            alpha_margin (int): Only consider points that are at this many pixels away from "edges" in the alpha channel.
+            max_alpha_change (float): Threshold for alpha change to consider an edge in the alpha channel.
+            depth_margin (int): Only consider points that are at this many pixels away from "edges" in the depth channel.
+            depth_change_threshold (float): Threshold for depth change to consider an edge in the depth channel.
+        """
+        self.min_pixel_distance = min_pixel_distance
+        self.threshold = threshold
+        self.alpha_margin = alpha_margin
+        self.max_alpha_change = max_alpha_change
+        self.depth_margin = depth_margin
+        self.depth_change_threshold = depth_change_threshold
+
+    def select_safe_pixels(self, alpha: np.ndarray, depth: np.ndarray) -> np.ndarray:
+        """
+        Select pixels based on alpha and depth channels.
+        Args:
+            alpha (np.ndarray): Alpha channel. Attention: Will be modified in place.
+            depth (np.ndarray): Depth channel. Attention: Will be modified in place.
+        Returns:
+            np.ndarray: Selected pixel locations (N, 2).
+        """
+        alpha[alpha < self.threshold] = 0
+        depth[alpha < self.threshold] = 0
+
+        safe_region = (
+            # Depth is constant within a margin
+            get_boolean_mask(depth, self.depth_margin, self.depth_change_threshold)
+            # Alpha is sufficiently high
+            & (alpha > self.threshold)
+            # Alpha is constant within a margin
+            & get_boolean_mask(alpha, self.alpha_margin, self.max_alpha_change)
+        )
+
+        sampled_pixels = sample_safe_zone(safe_region, self.min_pixel_distance)
+
+        return sampled_pixels
+    
+    @staticmethod
+    def get_3d_locations(sampled_pixels: np.ndarray, depth: np.ndarray, pose: np.ndarray, K: np.ndarray) -> np.ndarray:
+        """
+        Get 3D locations of the selected pixels.
+        Args:
+            sampled_pixels (np.ndarray): Selected pixel locations (N, 2).
+            depth (np.ndarray): Depth channel.
+            pose (np.ndarray): Pose of the object.
+            K (np.ndarray): Camera intrinsic matrix.
+        Returns:
+            np.ndarray: 3D locations of the selected pixels (N, 3).
+        """
+        # TODO: Should use camera intrinsics to get 3D location of ray origin instead of assuming it is at (0, 0, 0)
+        # TODO: Should batch this operation
+        intersections = []
+        for p in sampled_pixels:
+            pixel_ray_dir = pixel_to_ray_dir(p, K)
+            ray_origin, ray_direction = revert_pose_to_ray(
+                np.zeros(3), pixel_ray_dir, pose[:3, :3], pose[:3, 3]
+            )
+            depth_value = depth[p[1], p[0]]
+            t = depth_value / pixel_ray_dir[2]
+            point_3d = ray_origin + t * ray_direction
+            intersections.append(point_3d)
+        
+        intersections = np.array(intersections)
+
+        return intersections
+        
+    
+    def __call__(self, rgb: np.ndarray, alpha: np.ndarray, depth: np.ndarray, pose: np.ndarray, K: np.ndarray) -> np.ndarray:
+        """
+        Select points based on alpha and depth channels.
+        Args:
+            rgb (np.ndarray): RGB image.
+            alpha (np.ndarray): Alpha channel. Attention: Will be modified in place.
+            depth (np.ndarray): Depth channel. Attention: Will be modified in place.
+            pose (np.ndarray): Pose of the object.
+            K (np.ndarray): Camera intrinsic matrix.
+        Returns:
+            np.ndarray: Selected pixel locations (N, 2).
+        """
+        pixel_locations = self.select_safe_pixels(alpha, depth)
+        points_3d = self.get_3d_locations(pixel_locations, depth, pose, K)
+        
+        return points_3d

@@ -10,7 +10,7 @@ from typing import Iterable, Mapping, Optional, Tuple, Union
 
 import torch
 
-from posingpixels.cotracker import CoMeshTracker
+from posingpixels.cotracker import CoTrackerInput
 from posingpixels.utils.cotracker import get_ground_truths, scale_by_crop
 from posingpixels.utils.geometry import apply_pose_to_points
 
@@ -241,20 +241,50 @@ def compute_tapvid_metrics(
     )
     return metrics
 
-def get_gt_tracks(tracker: CoMeshTracker, crop: bool = True, device: Optional[torch.device] = None):
+# def get_gt_tracks(tracker: CoMeshTracker, crop: bool = True, device: Optional[torch.device] = None):
+#     if not device:
+#         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+#     gt_tracks = []
+#     gt_visibility = []
+#     gt_pose = None
+#     for i in range(tracker.limit):
+#         if (pose_i := tracker.get_gt_pose(i)) is not None:
+#             gt_pose = pose_i
+#         assert gt_pose is not None
+#         gt_depth = tracker.get_gt_depth(i)
+
+#         coords_i, vis_i = get_ground_truths(
+#             gt_pose, tracker.K, tracker.unposed_3d_points, tracker.get_mask(i), gt_depth
+#         )
+#         gt_tracks.append(coords_i)
+#         gt_visibility.append(vis_i)
+#     tracks, visibilities = np.array(gt_tracks), np.array(gt_visibility)
+#     if crop:
+#         tracks = (
+#             scale_by_crop(
+#                 torch.tensor(tracks).float().to(device),
+#                 torch.tensor(tracker.bboxes).to(device),
+#                 torch.tensor(tracker.scaling).to(device),
+#             )
+#             .cpu()
+#             .numpy()
+#         )
+#     return tracks, visibilities
+
+def get_gt_tracks(tracker_input: CoTrackerInput, crop: bool = True, device: Optional[torch.device] = None):
     if not device:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     gt_tracks = []
     gt_visibility = []
     gt_pose = None
-    for i in range(tracker.limit):
-        if (pose_i := tracker.get_gt_pose(i)) is not None:
+    for i in range(len(tracker_input)):
+        if (pose_i := tracker_input.get_gt_pose(i)) is not None:
             gt_pose = pose_i
         assert gt_pose is not None
-        gt_depth = tracker.get_gt_depth(i)
+        gt_depth = tracker_input.get_gt_depth(i)
 
         coords_i, vis_i = get_ground_truths(
-            gt_pose, tracker.K, tracker.unposed_3d_points, tracker.get_mask(i), gt_depth
+            gt_pose, tracker_input.dataset.K, tracker_input.canonical_points, tracker_input.get_mask(i), gt_depth
         )
         gt_tracks.append(coords_i)
         gt_visibility.append(vis_i)
@@ -263,8 +293,8 @@ def get_gt_tracks(tracker: CoMeshTracker, crop: bool = True, device: Optional[to
         tracks = (
             scale_by_crop(
                 torch.tensor(tracks).float().to(device),
-                torch.tensor(tracker.bboxes).to(device),
-                torch.tensor(tracker.scaling).to(device),
+                torch.tensor(tracker_input.bboxes).to(device),
+                torch.tensor(tracker_input.scaling).to(device),
             )
             .cpu()
             .numpy()

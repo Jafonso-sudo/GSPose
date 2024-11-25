@@ -52,7 +52,7 @@ def get_ground_truths(
     # Get the depth values posed_3d_points[:, 2] at the 2D coordinates gt_coords
     gt_depth = depth[gt_coords[:, 1].astype(int), gt_coords[:, 0].astype(int)]
     # Calculate visibility based on depth values
-    gt_visibility = np.abs(gt_depth - posed_3d_points[:, 2]) < 0.01
+    gt_visibility = np.abs(gt_depth - posed_3d_points[:, 2]) < 0.002
     # Apply prob_mask
     gt_visibility = (
         gt_visibility
@@ -94,8 +94,8 @@ def unscale_by_crop(points, bboxes, scaling_factors):
         Original uncropped and unscaled points (B, N, 2)
     """
     points = points.clone()
-    bboxes = bboxes.unsqueeze(1).repeat(1, points.shape[1], 1)
-    scaling_factors = scaling_factors.unsqueeze(1).repeat(1, points.shape[1], 1)
+    bboxes = bboxes.unsqueeze(1)#.repeat(1, points.shape[1], 1)
+    scaling_factors = scaling_factors.unsqueeze(1)#.repeat(1, points.shape[1], 1)
     
     # First reverse the scaling
     points /= scaling_factors

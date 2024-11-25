@@ -29,6 +29,36 @@ def pixel_to_ray_dir(pixel: np.ndarray, K: np.ndarray) -> np.ndarray:
     ray = np.linalg.inv(K) @ pixel_cord
     return ray / np.linalg.norm(ray)
 
+def pixel_to_ray_dir_batch(pixels: np.ndarray, K: np.ndarray) -> np.ndarray:
+    """
+    Convert multiple pixel coordinates to ray directions in batch.
+
+    Parameters
+    ----------
+    pixels : np.ndarray
+        The pixel coordinates. Shape: (N, 2), where N is the number of pixels.
+    K : np.ndarray
+        The camera matrix.
+
+    Returns
+    -------
+    np.ndarray
+        The normalized ray directions. Shape: (N, 3).
+    """
+    # Append 1 to each pixel coordinate to make it homogeneous
+    pixels_homogeneous = np.hstack((pixels, np.ones((pixels.shape[0], 1))))
+    
+    # Invert the camera matrix
+    K_inv = np.linalg.inv(K)
+    
+    # Compute the ray directions
+    rays = pixels_homogeneous @ K_inv.T
+    
+    # Normalize the ray directions
+    rays_normalized = rays / np.linalg.norm(rays, axis=1, keepdims=True)
+    
+    return rays_normalized
+
 
 def pixel_to_ray_batch(pixels: np.ndarray, K: np.ndarray) -> np.ndarray:
     """
@@ -125,7 +155,6 @@ def apply_pose_to_points(
     np.ndarray
         The transformed points.
     """
-    # TODO: I believe the last transpose is not necessary, if something breaks, add it outside the function
     return (R @ points.T).T + T
 
 
@@ -340,6 +369,75 @@ def interpolate_poses(R_start, T_start, R_end, T_end, num_steps) -> List[np.ndar
         interpolated_poses.append(pose)
 
     return interpolated_poses
+
+def rotation_matrix_x(theta: float) -> np.ndarray:
+    """
+    Generate a rotation matrix around the x-axis.
+
+    Parameters
+    ----------
+    theta : float
+        The rotation angle in radians.
+
+    Returns
+    -------
+    np.ndarray
+        The rotation matrix.
+    """
+    c, s = np.cos(theta), np.sin(theta)
+    return np.array(
+        [
+            [1, 0, 0],
+            [0, c, -s],
+            [0, s, c]
+        ]
+    )
+
+def rotation_matrix_y(theta: float) -> np.ndarray:
+    """
+    Generate a rotation matrix around the y-axis.
+
+    Parameters
+    ----------
+    theta : float
+        The rotation angle in radians.
+
+    Returns
+    -------
+    np.ndarray
+        The rotation matrix.
+    """
+    c, s = np.cos(theta), np.sin(theta)
+    return np.array(
+        [
+            [c, 0, s],
+            [0, 1, 0],
+            [-s, 0, c]
+        ]
+    )
+    
+def rotation_matrix_z(theta: float) -> np.ndarray:
+    """
+    Generate a rotation matrix around the z-axis.
+
+    Parameters
+    ----------
+    theta : float
+        The rotation angle in radians.
+
+    Returns
+    -------
+    np.ndarray
+        The rotation matrix.
+    """
+    c, s = np.cos(theta), np.sin(theta)
+    return np.array(
+        [
+            [c, -s, 0],
+            [s, c, 0],
+            [0, 0, 1]
+        ]
+    )
 
 def do_axis_rotation(R: np.ndarray, S: int, axis: Literal['x', 'y', 'z']) -> np.ndarray:
     # Ensure the input rotation matrix is a NumPy array

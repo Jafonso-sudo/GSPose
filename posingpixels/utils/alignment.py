@@ -43,7 +43,7 @@ def sample_safe_zone(safe_zone: np.ndarray, min_dist: int) -> np.ndarray:
     - min_dist (int): Minimum distance between any two sampled points (in pixels).
 
     Returns:
-    - List[Tuple[int, int]]: List of sampled point coordinates.
+    - np.ndarray: Array of shape (N, 2) where N is the number of sampled points.
     """
     # Get indices of all pixels in the safe zone
     safe_points = np.argwhere(safe_zone)

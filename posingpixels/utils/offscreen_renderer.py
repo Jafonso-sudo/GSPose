@@ -9,7 +9,8 @@ import numpy as np
 import pyrender
 from tqdm import tqdm
 from multiprocessing import Pool
-
+import os
+os.environ['PYOPENGL_PLATFORM'] = 'egl'
 cvcam_in_glcam = np.array([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
 
 

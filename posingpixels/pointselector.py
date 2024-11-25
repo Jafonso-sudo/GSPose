@@ -120,17 +120,23 @@ class SelectMostConfidentView(PointSelectorStrategy):
     ) -> "tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]":
         T = coordinates.shape[0]
 
-        _, _, best_query_indices = get_most_confident_views(
+        best_view, view_point_mask, best_query_indices = get_most_confident_views(
             metric if metric is not None else confidence,
             self.query_to_point_mapping[..., 1],
             self.N,
             self.view_sizes,
         )
+        
+        best_view_point_mask = view_point_mask[best_view] # T x N
 
         time_indices = torch.arange(T, device=coordinates.device).unsqueeze(1)
         point_coords = coordinates[time_indices, best_query_indices]
         point_vis = visibility[time_indices, best_query_indices]
+        point_vis = point_vis * best_view_point_mask
         point_conf = confidence[time_indices, best_query_indices]
+        point_conf = point_conf * best_view_point_mask
+        
+        
 
         return point_coords, point_vis, point_conf, best_query_indices
 
@@ -197,7 +203,7 @@ def get_most_confident_views(
 
     query_to_view = torch.repeat_interleave(
         torch.arange(len(queries_lengths), device=pred_confidence.device),
-        torch.tensor(queries_lengths),
+        queries_lengths,
     )
 
     # Step 1: Find the most confident view for each timestamp
@@ -229,7 +235,11 @@ def get_most_confident_views(
     # Create a mask for queries belonging to each point
     query_point_mask = torch.zeros(Q, num_points, device=pred_confidence.device)
     query_point_mask[query_indices, query_to_point] = 1
-
+    
+    # Create a mask for points belonging to a view (Shape: (V, N))
+    view_point_mask = torch.zeros(V, num_points, device=pred_confidence.device)
+    view_point_mask[query_to_view, query_to_point] = 1
+    
     # Mask confidence scores for queries not in the best view
     masked_confidence = pred_confidence.unsqueeze(-1) * query_point_mask.unsqueeze(
         0
@@ -240,4 +250,4 @@ def get_most_confident_views(
     masked_confidence[masked_confidence == 0] = float("-inf")
     best_query_indices = torch.argmax(masked_confidence, dim=1)  # Shape: (T, N)
 
-    return best_view_indices, best_view_mask, best_query_indices
+    return best_view_indices, view_point_mask, best_query_indices

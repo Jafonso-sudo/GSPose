@@ -86,7 +86,9 @@ class CoPoseTracker:
 
         # Go through query poses and interpolate between them
         query_frames, prepend_poses = [], []
-        for i, pose in enumerate(np.concatenate([query_poses[1:], [start_pose]], axis=0), 1):
+        for i, pose in enumerate(
+            np.concatenate([query_poses[1:], [start_pose]], axis=0), 1
+        ):
             query_frames.append(len(prepend_poses))
             prepend_poses.extend(
                 interpolate_poses(
@@ -97,8 +99,8 @@ class CoPoseTracker:
                     self.pose_interpolation_steps,
                 )
             )
-        # Ensure that there is at least `step` frames before the first real frame
-        prepend_poses.extend([start_pose] * self.cotracker_step)
+        # Ensure that there is at least `window` frames before the first real frame
+        prepend_poses.extend([start_pose] * self.cotracker_window)
         prepend_poses = np.stack(prepend_poses, axis=0)
         prepend_length, num_points = len(prepend_poses), len(canonical_points)
 
@@ -242,21 +244,18 @@ class CoTrackerInput:
     def get_initialization(self, device: torch.device):
         flatten_query_to_point_indexes = self.query_to_point_indexes[:, 1].flatten()
         # Coords
-        init_coords = np.zeros((self.limit, self.num_query_points, 2))
-        init_coords[: self.prepend_length] = self.prepend_coords[
+        init_coords = np.zeros((self.prepend_length, self.num_query_points, 2))
+        init_coords[...] = self.prepend_coords[
             :, flatten_query_to_point_indexes
         ]
-        init_coords[self.prepend_length :, :] = self.prepend_coords[
-            -1, flatten_query_to_point_indexes
-        ]
         # Visibility
-        init_vis = np.zeros((self.limit, self.num_query_points))
-        init_vis[: self.prepend_length] = (
+        init_vis = np.zeros((self.prepend_length, self.num_query_points))
+        init_vis = (
             self.prepend_vis[:, flatten_query_to_point_indexes] - 0.5
         ) * 40
         # Confidence
-        init_confidence = np.zeros((self.limit, self.num_query_points))
-        init_confidence[: self.prepend_length, :] = 20
+        init_confidence = np.zeros((self.prepend_length, self.num_query_points))
+        init_confidence[...] = 20
 
         return (
             torch.tensor(init_coords[None], device=device).float(),
@@ -276,6 +275,9 @@ class CropCoPoseTracker(CoPoseTracker):
         query_poses: Optional[np.ndarray] = None,
         start_pose: Optional[np.ndarray] = None,
         limit: Optional[int] = None,
+        forced_coords: Optional[torch.Tensor] = None,
+        forced_vis: Optional[torch.Tensor] = None,
+        forced_conf: Optional[torch.Tensor] = None,
     ):
         if canonical_poses is None:
             canonical_poses = self.get_canonical_poses(dataset.get_canonical_pose())
@@ -290,13 +292,11 @@ class CropCoPoseTracker(CoPoseTracker):
             #     )[1:]
             #     z_axis_poses[:, :, 3] = pose[:, 3]
             #     query_poses = np.concatenate([query_poses, z_axis_poses], axis=0)
-                
+
         if start_pose is None:
             start_pose = dataset.get_gt_pose(0)
         # Get canonical points
-        canonical_points = self.get_canonical_points(
-            dataset, canonical_poses
-        )
+        canonical_points = self.get_canonical_points(dataset, canonical_poses)
         # Get prepend video
         prepend_coords, prepend_vis, prepend_poses, query_frames = (
             self.create_prepend_video(
@@ -331,13 +331,17 @@ class CropCoPoseTracker(CoPoseTracker):
 
         # Run CoTracker
         query_refiner = self.prepare_query_refiner(cotracker_input, canonical_points)
-        pred_coords, pred_vis, pred_conf = self.run_cotracker(cotracker_input, query_refiner)
-        
+        pred_coords, pred_vis, pred_conf = self.run_cotracker(
+            cotracker_input, query_refiner, forced_coords, forced_vis, forced_conf
+        )
+
         # Postprocess CoTracker output
-        pred_coords, pred_vis, pred_conf, pred_coords_original = self.postprocess_output(cotracker_input, pred_coords, pred_vis, pred_conf)
-        
+        pred_coords, pred_vis, pred_conf, pred_coords_original = (
+            self.postprocess_output(cotracker_input, pred_coords, pred_vis, pred_conf)
+        )
+
         return pred_coords, pred_vis, pred_conf, pred_coords_original, cotracker_input
-    
+
     def get_canonical_poses(self, canonical_pose: np.ndarray):
         canonical_poses = canonical_pose[np.newaxis]
         poses = []
@@ -388,12 +392,16 @@ class CropCoPoseTracker(CoPoseTracker):
             .cpu()
             .numpy()
         )
-        
+
         frame_idx = np.repeat(input.query_frames, input.query_lengths)
-        
-        input.input_query[:, 1:] = input.prepend_coords[frame_idx, input.query_to_point_indexes[:, 1]]
-        
-    def prepare_query_refiner(self, input: CoTrackerInput, canonical_points: np.ndarray):
+
+        input.input_query[:, 1:] = input.prepend_coords[
+            frame_idx, input.query_to_point_indexes[:, 1]
+        ]
+
+    def prepare_query_refiner(
+        self, input: CoTrackerInput, canonical_points: np.ndarray
+    ):
         if self.pnp_solver is None:
             return None
         point_selector_strategy = SelectMostConfidentView(
@@ -414,18 +422,55 @@ class CropCoPoseTracker(CoPoseTracker):
             gt_poses[:, :3, :3],
             gt_poses[:, :3, 3],
         )
-        
+
         return query_refiner
-    
-    def run_cotracker(self, input: CoTrackerInput, query_refiner: QueryRefiner):
+
+    def run_cotracker(
+        self,
+        input: CoTrackerInput,
+        query_refiner: QueryRefiner,
+        forced_coords: Optional[torch.Tensor] = None,
+        forced_vis: Optional[torch.Tensor] = None,
+        forced_conf: Optional[torch.Tensor] = None,
+    ):
         init_coords, init_vis, init_confidence = input.get_initialization(self.device)
+        if (
+            forced_coords is not None
+            and forced_vis is not None
+            and forced_conf is not None
+        ):
+            # forced_length = forced_coords.shape[1]
+            # forced_point_num = forced_coords.shape[2]
+            # init_coords[
+            #     :,
+            #     input.prepend_length : input.prepend_length + forced_length,
+            #     :forced_point_num,
+            # ] = forced_coords
+            # init_vis[
+            #     :,
+            #     input.prepend_length : input.prepend_length + forced_length,
+            #     :forced_point_num,
+            # ] = forced_vis
+            # init_confidence[
+            #     :,
+            #     input.prepend_length : input.prepend_length + forced_length,
+            #     :forced_point_num,
+            # ] = forced_conf
+            init_coords = torch.cat((init_coords, forced_coords), dim=1)
+            init_vis = torch.cat((init_vis, forced_vis), dim=1)
+            init_confidence = torch.cat((init_confidence, forced_conf), dim=1)
         input_query = input.get_queries(self.device)
-        
+
         batch_iterator = ImageBatchIterator(
-            input.video_dir, batch_size=self.cotracker_step * 2, overlap=self.cotracker_step, device=self.device
+            input.video_dir,
+            batch_size=self.cotracker_step * 2,
+            overlap=self.cotracker_step,
+            device=self.device,
         )
         is_first_step = True
-        with torch.autocast(device_type=self.device.type, dtype=torch.float16, enabled=self.downcast):
+        with torch.autocast(
+            device_type=self.device.type, dtype=torch.float16, enabled=self.downcast
+        ):
             cotracker_online = CoTrackerOnlinePredictor(
                 window_len=self.cotracker_step * 2, offline=False
             ).to(self.device)
@@ -442,10 +487,18 @@ class CropCoPoseTracker(CoPoseTracker):
                     query_refiner=query_refiner,
                 )
                 is_first_step = False
-                
+
+            del cotracker_online  # Free up memory
+
         return pred_coords, pred_vis, pred_conf
-    
-    def postprocess_output(self, input: CoTrackerInput, pred_coords: torch.Tensor, pred_vis: torch.Tensor, pred_conf: torch.Tensor):
+
+    def postprocess_output(
+        self,
+        input: CoTrackerInput,
+        pred_coords: torch.Tensor,
+        pred_vis: torch.Tensor,
+        pred_conf: torch.Tensor,
+    ):
         # Fix visibility for points outside the mask
         pred_coords_original = unscale_by_crop(
             pred_coords[0],
@@ -459,8 +512,9 @@ class CropCoPoseTracker(CoPoseTracker):
         masks_torch = torch.tensor(masks_np).to(self.device)
         unmasked_indices = get_tracks_outside_mask(pred_coords_original, masks_torch)
         pred_vis[:, unmasked_indices[:, 0], unmasked_indices[:, 1]] = 0
-        
+
         return pred_coords, pred_vis, pred_conf, pred_coords_original.unsqueeze(0)
+
 
 # class CoMeshTracker:
 #     def __init__(

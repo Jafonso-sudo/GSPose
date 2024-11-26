@@ -49,14 +49,26 @@ def get_ground_truths(
 ) -> Tuple[np.ndarray, np.ndarray]:
     posed_3d_points = apply_pose_to_points(unposed_3d_points, pose[:3, :3], pose[:3, 3])
     gt_coords = render_points_in_2d(posed_3d_points, K[:3, :3])
+    # Get index of points outside the frame
+    out_of_frame = (
+        (gt_coords[:, 0] < 0)
+        | (gt_coords[:, 0] >= prob_mask.shape[1])
+        | (gt_coords[:, 1] < 0)
+        | (gt_coords[:, 1] >= prob_mask.shape[0])
+    )
+    if out_of_frame.sum() > 0:
+        print(f"Warning: {out_of_frame.sum()} points are outside the frame for pose {pose}")
+    gt_coords_safe = gt_coords.copy()
+    gt_coords_safe[out_of_frame] = [0, 0]
     # Get the depth values posed_3d_points[:, 2] at the 2D coordinates gt_coords
-    gt_depth = depth[gt_coords[:, 1].astype(int), gt_coords[:, 0].astype(int)]
+    gt_depth = depth[gt_coords_safe[:, 1].astype(int), gt_coords_safe[:, 0].astype(int)]
     # Calculate visibility based on depth values
     gt_visibility = np.abs(gt_depth - posed_3d_points[:, 2]) < 0.002
     # Apply prob_mask
     gt_visibility = (
+        (~out_of_frame).astype(int) *
         gt_visibility
-        * prob_mask[gt_coords[:, 1].astype(int), gt_coords[:, 0].astype(int)]
+        * prob_mask[gt_coords_safe[:, 1].astype(int), gt_coords_safe[:, 0].astype(int)]
     )
 
     return gt_coords, gt_visibility

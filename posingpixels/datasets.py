@@ -55,7 +55,7 @@ class YCBinEOATDataset(torch.utils.data.Dataset):
                 prompts=self.videoname_to_sam_prompt[self.video_name],
             )
         self.mask_files = sorted(glob.glob(f"{self.masks_dir}/*.png"))
-        
+
         # Video
         self.max_frames = len(self.rgb_video_files)
         self.start_frame = 0
@@ -76,7 +76,7 @@ class YCBinEOATDataset(torch.utils.data.Dataset):
 
         # Experiments
         self.use_cad_rgb = use_cad_rgb
-        
+
     def reset_frame_range(self):
         self.start_frame = 0
         self.end_frame = self.max_frames
@@ -148,12 +148,24 @@ class YCBinEOATDataset(torch.utils.data.Dataset):
         alpha = (depth > 0).astype(float)
         return rgb, depth, alpha
 
+    def _get_safe_distance(self):
+        # TODO: Implement smallest distance from the camera to the object such that it is fully visible
+        f_x = self.K[0, 0]
+        f_y = self.K[1, 1]
+        c_x = self.K[0, 2]
+        c_y = self.K[1, 2]
+        
+        d_x = 2 * min(c_x, self.W - c_x - 1)
+        d_y = 2 * min(c_y, self.H - c_y - 1)
+
+        return self.obj_diameter * 1.2
+
     def get_canonical_pose(self):
         canonical_pose = np.eye(4)
         diameter = self.obj_diameter
 
         # Translate along z-axis by diameter
-        canonical_pose[:3, 3] = np.array([0, 0, diameter])
+        canonical_pose[:3, 3] = np.array([0, 0, self._get_safe_distance()])
         # Rotate 90 degrees around x-axis then rotate around y-axis 180 degrees
         canonical_pose[:3, :3] = np.array([[-1, 0, 0], [0, 0, -1], [0, -1, 0]])
 

@@ -283,6 +283,9 @@ class CropCoPoseTracker(CoPoseTracker):
             canonical_poses = self.get_canonical_poses(dataset.get_canonical_pose())
         if query_poses is None:
             query_poses = canonical_poses
+        else:
+            query_poses = np.concatenate([canonical_poses, query_poses], axis=0)
+        
             # for pose in canonical_poses:
             #     z_axis_poses = np.eye(4)[np.newaxis].repeat(
             #         3, axis=0

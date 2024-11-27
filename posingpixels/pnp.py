@@ -133,6 +133,7 @@ class OpenCVePnP(PnPSolver[None]):
         use_ransac: bool = True,
         weight_threshold: float = 0.9,
         ransac_inliner_threshold: float = 2.0,
+        ransac_iterations: int = 500,
         min_inliers: int = 20,
         X: Optional[torch.Tensor] = None,
         K: Optional[torch.Tensor] = None,
@@ -145,6 +146,7 @@ class OpenCVePnP(PnPSolver[None]):
         self.weight_threshold = weight_threshold
         self.min_inliers = min_inliers
         self.ransac_inliner_threshold = ransac_inliner_threshold
+        self.ransac_iterations = ransac_iterations
 
     def __call__(
         self,
@@ -187,7 +189,7 @@ class OpenCVePnP(PnPSolver[None]):
                 None,
                 flags=cv2.SOLVEPNP_EPNP,
                 reprojectionError=self.ransac_inliner_threshold,
-                iterationsCount=300,
+                iterationsCount=self.ransac_iterations,
             )
             # _, rvec, tvec = cv2.solvePnP(x_i, y, K_np, distCoeffs=None, flags=cv2.SOLVEPNP_EPNP)
             # _, rvec, tvec = self.method(x, y, K_np, distCoeffs=None, flags=self.flags)

@@ -105,34 +105,34 @@ class YCBinEOATDataset(torch.utils.data.Dataset):
         ]
 
     def get_gt_pose(self, idx: int) -> np.ndarray:
-        idx -= self.start_frame
+        idx += self.start_frame
         file = self.gt_pose_files[idx]
         return np.loadtxt(file).reshape(4, 4)
 
     def get_rgb(self, idx: int) -> np.ndarray:
-        idx -= self.start_frame
         if self.use_cad_rgb:
             return self.get_cad_rgb(idx)
+        idx += self.start_frame
         return cv2.cvtColor(
             cv2.imread(self.rgb_video_files[idx], cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB
         )
 
     def get_cad_rgb(self, idx: int) -> np.ndarray:
-        idx -= self.start_frame
+        idx += self.start_frame
         return cv2.cvtColor(
             cv2.imread(self.cad_rgb_files[idx], cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB
         )
 
     def get_mask(self, idx: int) -> np.ndarray:
-        idx -= self.start_frame
+        idx += self.start_frame
         return cv2.imread(self.mask_files[idx], cv2.IMREAD_GRAYSCALE) / 255
 
     def get_gt_mask(self, idx: int) -> np.ndarray:
-        idx -= self.start_frame
+        idx += self.start_frame
         return cv2.imread(self.gt_mask_files[idx], cv2.IMREAD_GRAYSCALE)
 
     def get_cad_depth(self, idx: int) -> np.ndarray:
-        idx -= self.start_frame
+        idx += self.start_frame
         depth_image = Image.open(self.cad_depth_files[idx])
 
         return np.array(depth_image).astype(np.float32)
@@ -140,8 +140,6 @@ class YCBinEOATDataset(torch.utils.data.Dataset):
     def render_mesh_at_pose(
         self, pose: Optional[np.ndarray] = None, idx: Optional[int] = None
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        if idx is not None:
-            idx -= self.start_frame
         assert (pose is None) != (idx is None)
         pose = self.get_gt_pose(idx) if pose is None else pose
         rgb, depth = self.renderer.render(pose, self.get_mesh())

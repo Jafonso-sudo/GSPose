@@ -1,3 +1,4 @@
+from matplotlib import pyplot as plt
 import numpy as np
 from scipy.ndimage import maximum_filter, minimum_filter
 from scipy.spatial import distance
@@ -64,5 +65,14 @@ def sample_safe_zone(safe_zone: np.ndarray, min_dist: int) -> np.ndarray:
             selected_points.append(point)
 
     selected_np = np.array(selected_points)
+    
+    # DEBUG VIS
+    # fig = plt.figure()
+    # ax = fig.add_subplot(111)
+    # ax.imshow(safe_zone)
+    # ax.scatter(selected_np[:, 1], selected_np[:, 0], c='b', s=5)
+    # resulting_figure = plt.gcf()
+    
+    
     # Make point[0] as y and point[1] as x
     return np.array([selected_np[:, 1], selected_np[:, 0]]).T

@@ -63,7 +63,8 @@ def get_ground_truths(
     # Get the depth values posed_3d_points[:, 2] at the 2D coordinates gt_coords
     gt_depth = depth[gt_coords_safe[:, 1].astype(int), gt_coords_safe[:, 0].astype(int)]
     # Calculate visibility based on depth values
-    gt_visibility = np.abs(gt_depth - posed_3d_points[:, 2]) < 0.002
+    # TODO: This should be a average for points inbetween pixels
+    gt_visibility = np.abs(gt_depth - posed_3d_points[:, 2]) < 0.002 # TODO: Make this a parameter (for Gaussian splats it should be higher than CAD models)
     # Apply prob_mask
     gt_visibility = (
         (~out_of_frame).astype(int) *

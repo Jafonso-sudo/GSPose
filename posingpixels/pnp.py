@@ -135,6 +135,7 @@ class OpenCVePnP(PnPSolver[None]):
         ransac_inliner_threshold: float = 2.0,
         ransac_iterations: int = 500,
         min_inliers: int = 20,
+        loss_fn: nn.Module = nn.L1Loss(reduction="none"),
         X: Optional[torch.Tensor] = None,
         K: Optional[torch.Tensor] = None,
         R: Optional[torch.Tensor] = None,
@@ -147,6 +148,7 @@ class OpenCVePnP(PnPSolver[None]):
         self.min_inliers = min_inliers
         self.ransac_inliner_threshold = ransac_inliner_threshold
         self.ransac_iterations = ransac_iterations
+        self.loss_fn = loss_fn
 
     def __call__(
         self,
@@ -166,6 +168,7 @@ class OpenCVePnP(PnPSolver[None]):
 
         all_R = []
         all_T = []
+        errors = []
 
         for i in range(B):
             y = Y_np[i]
@@ -182,7 +185,7 @@ class OpenCVePnP(PnPSolver[None]):
                     x_i = x[above_threshold]
                     y = y[above_threshold]
 
-            _, rvec, tvec, _ = cv2.solvePnPRansac(
+            _, rvec, tvec, err = cv2.solvePnPRansac(
                 x_i,
                 y,
                 K_np,
@@ -190,15 +193,47 @@ class OpenCVePnP(PnPSolver[None]):
                 flags=cv2.SOLVEPNP_EPNP,
                 reprojectionError=self.ransac_inliner_threshold,
                 iterationsCount=self.ransac_iterations,
+                confidence=0.9999
             )
             # _, rvec, tvec = cv2.solvePnP(x_i, y, K_np, distCoeffs=None, flags=cv2.SOLVEPNP_EPNP)
             # _, rvec, tvec = self.method(x, y, K_np, distCoeffs=None, flags=self.flags)
             # rvec, tvec = cv2.solvePnPRefineLM(x, y, K_np, None, rvec, tvec)
             R_np = cv2.Rodrigues(rvec)[0]
             T_np = tvec.squeeze()
-            all_R.append(torch.tensor(R_np, device=Y.device))
-            all_T.append(torch.tensor(T_np, device=Y.device))
-        return torch.stack(all_R), torch.stack(all_T), None
+            all_R.append(torch.tensor(R_np, device=Y.device, dtype=torch.float32))
+            all_T.append(torch.tensor(T_np, device=Y.device, dtype=torch.float32))
+            
+            weights_i = weights[i] if weights is not None else torch.ones(Q, device=Y.device)
+            
+            rendered_prediction = self.pose_and_render_points(X, all_R[-1].unsqueeze(0), all_T[-1].unsqueeze(0), K)[0, :, :2]
+            errors.append(torch.mean(weights_i.unsqueeze(-1) * self.loss_fn(rendered_prediction, Y[i])))
+        
+        prev_R, prev_T = None, None
+        for i in range(B):
+            if prev_R is not None and prev_T is not None:
+                weights_i = weights[i] if weights is not None else torch.ones(Q, device=Y.device)
+                rendered_with_prev = self.pose_and_render_points(X, prev_R.unsqueeze(0), prev_T.unsqueeze(0), K)[0, :, :2]
+                error_with_prev = torch.mean(weights_i.unsqueeze(-1) * self.loss_fn(rendered_with_prev, Y[i]))
+                if error_with_prev < errors[i]:
+                    all_R[i], all_T[i] = prev_R, prev_T
+                    errors[i] = error_with_prev
+                
+            prev_R, prev_T = all_R[i], all_T[i]
+        
+        post_R, post_T = None, None
+        for i in range(B - 1, -1, -1):
+            if post_R is not None and post_T is not None:
+                weights_i = weights[i] if weights is not None else torch.ones(Q, device=Y.device)
+                rendered_with_post = self.pose_and_render_points(X, post_R.unsqueeze(0), post_T.unsqueeze(0), K)[0, :, :2]
+                error_with_post = torch.mean(weights_i.unsqueeze(-1) * self.loss_fn(rendered_with_post, Y[i]))
+                if error_with_post < errors[i]:
+                    all_R[i], all_T[i] = post_R, post_T
+                    errors[i] = error_with_post
+                
+            post_R, post_T = all_R[i], all_T[i]
+            
+        
+        return torch.stack(all_R), torch.stack(all_T), torch.stack(errors)
 
 
 class RANSACePnP(PnPSolver[None]):
@@ -314,7 +349,7 @@ class GradientPnP(PnPSolver[GradientResults]):
         elif reconstruction_loss_type == "l1":
             return nn.L1Loss(reduction="none")
         elif reconstruction_loss_type == "huber":
-            return nn.HuberLoss(reduction="none")
+            return nn.HuberLoss(reduction="none", delta=0.1)
         else:
             raise ValueError(f"Unknown reconstruction loss: {reconstruction_loss_type}")
 
@@ -428,68 +463,3 @@ class GradientPnP(PnPSolver[GradientResults]):
                     break
 
         return rotation_6d_to_matrix(R_params.detach()), T_params.detach(), results
-
-
-class SingleFrameGradientPnP(PnPSolver[List[GradientResults]]):
-    def __init__(
-        self,
-        epochs: int = 4000,
-        warmup_epochs: int = 100,
-        max_lr: float = 0.02,
-        min_lr: float = 0.0,
-        early_stop_epochs: int = 100,
-        early_stop_loss_grad_norm: float = 1e-4,
-        temporal_consistency_weight: float = 0.2,
-        reconstruction_loss: Literal["mse", "l1", "huber"] = "huber",
-        reconstruction_loss_clip: Optional[float] = None,
-        reconstruction_loss_clip_start_epoch: int = 200,
-        X: Optional[torch.Tensor] = None,
-        K: Optional[torch.Tensor] = None,
-        R: Optional[torch.Tensor] = None,
-        T: Optional[torch.Tensor] = None,
-        disable_tqdm: bool = False,
-    ):
-        self.gradient_pnp = GradientPnP(
-            epochs,
-            warmup_epochs,
-            max_lr,
-            min_lr,
-            early_stop_epochs,
-            early_stop_loss_grad_norm,
-            0.0,  # temporal_consistency_weight,
-            reconstruction_loss,
-            reconstruction_loss_clip,
-            reconstruction_loss_clip_start_epoch,
-            X,
-            K,
-            R,
-            T,
-            True,  # disable_tqdm,
-        )
-        self.gradient_pnp.disable_tqdm = True
-        self.temporal_consistency_weight = 0.0
-
-    def __call__(
-        self,
-        Y: torch.Tensor,
-        weights: Optional[torch.Tensor] = None,
-        X: Optional[torch.Tensor] = None,
-        K: Optional[torch.Tensor] = None,
-        R: Optional[torch.Tensor] = None,
-        T: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor, List[GradientResults]]:
-        X, Y, K, weights, R, T, B, Q = self._input_parser(X, Y, K, weights, R, T)
-        result_R = torch.zeros(B, 3, 3, device=R.device)
-        result_T = torch.zeros(B, 3, device=T.device)
-        gradient_results: List[GradientResults] = [None] * B
-        for i in tqdm.tqdm(range(B), disable=self.disable_tqdm):
-            result_R[i], result_T[i], gradient_results[i] = self.gradient_pnp(
-                Y[i],
-                weights[i] if weights is not None else None,
-                X,
-                K,
-                R[i] if R is not None else None,
-                T[i] if T is not None else None,
-            )
-
-        return result_R, result_T, gradient_results

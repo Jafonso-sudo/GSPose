@@ -312,8 +312,8 @@ class CanonicalPointSampler:
         threshold: float = 0.9,
         alpha_margin: int = 10,
         max_alpha_change: float = 0.01,
-        depth_margin: int = 6,
-        depth_change_threshold: float = 0.01,
+        depth_margin: int = 10,
+        depth_change_threshold: float = 0.02,
     ):
         """
         Args:
@@ -330,6 +330,34 @@ class CanonicalPointSampler:
         self.max_alpha_change = max_alpha_change
         self.depth_margin = depth_margin
         self.depth_change_threshold = depth_change_threshold
+        
+    def get_safe_zone(self, alpha: np.ndarray, depth: np.ndarray) -> np.ndarray:
+        """
+        Get safe zone based on alpha and depth channels.
+        Args:
+            alpha (np.ndarray): Alpha channel.
+            depth (np.ndarray): Depth channel.
+        Returns:
+            np.ndarray: Safe zone.
+        """
+        alpha[alpha < self.threshold] = 0
+        depth[alpha < self.threshold] = 0
+        safe_depth = get_boolean_mask(depth, self.depth_margin, self.depth_change_threshold)
+        safe_alpha = get_boolean_mask(alpha, self.alpha_margin, self.max_alpha_change)
+        safe_region = (
+            # Depth is constant within a margin
+            safe_depth
+            # Alpha is sufficiently high
+            & (alpha > self.threshold)
+            # Alpha is constant within a margin
+            & safe_alpha
+        )
+        
+        # For visualization/debugging purposes
+        safe_vis = alpha.copy() * 255
+        safe_vis[~safe_region] //=2
+
+        return safe_region
 
     def select_safe_pixels(self, alpha: np.ndarray, depth: np.ndarray) -> np.ndarray:
         """
@@ -340,17 +368,7 @@ class CanonicalPointSampler:
         Returns:
             np.ndarray: Selected pixel locations (N, 2).
         """
-        alpha[alpha < self.threshold] = 0
-        depth[alpha < self.threshold] = 0
-
-        safe_region = (
-            # Depth is constant within a margin
-            get_boolean_mask(depth, self.depth_margin, self.depth_change_threshold)
-            # Alpha is sufficiently high
-            & (alpha > self.threshold)
-            # Alpha is constant within a margin
-            & get_boolean_mask(alpha, self.alpha_margin, self.max_alpha_change)
-        )
+        safe_region = self.get_safe_zone(alpha, depth)
 
         sampled_pixels = sample_safe_zone(safe_region, self.min_pixel_distance)
 

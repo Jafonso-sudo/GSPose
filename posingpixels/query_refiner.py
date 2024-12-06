@@ -98,9 +98,6 @@ class QueryRefiner:
             self.point_selector.query_to_point(coordinates, visibility, confidence)
         )
         
-        # Get bboxes and scaling (padding them if necessary)
-        # TODO
-        
         # Uncrop the coordinates
         uncroped_coordinates = unscale_by_crop(
             coordinates, self.bboxes[left:right], self.scaling[left:right]

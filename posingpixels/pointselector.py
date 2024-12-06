@@ -135,8 +135,8 @@ class SelectMostConfidentView(PointSelectorStrategy):
         point_vis = point_vis * best_view_point_mask
         point_conf = confidence[time_indices, best_query_indices]
         point_conf = point_conf * best_view_point_mask
-        
-        
+          
+        best_query_indices[best_view_point_mask == 0] = -1
 
         return point_coords, point_vis, point_conf, best_query_indices
 

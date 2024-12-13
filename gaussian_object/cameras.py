@@ -21,7 +21,7 @@ from gaussian_object.utils.graphics_utils import getWorld2View2, getProjectionMa
 class Camera(nn.Module):
     def __init__(self, colmap_id, R, T, FoVx, FoVy, image, gt_alpha_mask,
                  image_name, uid,
-                 cx_offset, cy_offset, mask=None,
+                 cx_offset, cy_offset, mask=None, cad_depth=None, depth=None,
                  trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda"
                  ):
         super(Camera, self).__init__()
@@ -51,6 +51,9 @@ class Camera(nn.Module):
             self.original_image *= gt_alpha_mask.to(self.data_device)
         else:
             self.original_image *= torch.ones((1, self.image_height, self.image_width), device=self.data_device)
+        self.mask = mask.to(self.data_device) if mask is not None else torch.ones((1, self.image_height, self.image_width), device=self.data_device)
+        self.cad_depth = cad_depth.to(self.data_device) if cad_depth is not None else None
+        self.depth = depth.to(self.data_device) if depth is not None else None
 
         self.zfar = 100.0
         self.znear = 0.01

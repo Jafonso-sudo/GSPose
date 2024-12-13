@@ -3,6 +3,7 @@ import numpy as np
 from PIL import Image
 from torch.cuda import is_available
 from tqdm import tqdm
+from operator import itemgetter
 import os
 import torch
 from cotracker.predictor import CoTrackerOnlinePredictor
@@ -52,18 +53,18 @@ class CoTrackerInput:
         self.dataset = dataset
         self.init_value = init_value
         self.limit = limit or len(dataset)
-        
+
         self.canonical_points: np.ndarray = None
         self.num_canonical_points: int = None
         self.canonical_init = False
-        
+
         self.prepend_dir = os.path.join(dataset.video_dir, "init_video")
         self.prepend_poses: np.ndarray = None
         self.prepend_coords: np.ndarray = None
         self.prepend_vis: np.ndarray = None
         self.prepend_length: int = None
         self.prepend_init = False
-        
+
         self.video_dir = os.path.join(dataset.video_dir, "input")
         self.input_query: np.ndarray = None
         self.query_frames: np.ndarray = None
@@ -71,32 +72,42 @@ class CoTrackerInput:
         self.query_lengths: np.ndarray = None
         self.query_to_point_indexes: np.ndarray = None
         self.query_init = False
-        
+
         self.bboxes: np.ndarray = None
         self.scaling: np.ndarray = None
         self.cropping_init = False
-        
-        
+
     def set_canonical_points(self, canonical_points: np.ndarray):
         self.canonical_points = canonical_points
         self.num_canonical_points = canonical_points.shape[0]
         self.canonical_init = True
-        
-    def set_prepend_video(self, prepend_poses: np.ndarray, prepend_coords: np.ndarray, prepend_vis: np.ndarray, query_frames: np.ndarray):
+
+    def set_prepend_video(
+        self,
+        prepend_poses: np.ndarray,
+        prepend_coords: np.ndarray,
+        prepend_vis: np.ndarray,
+        query_frames: np.ndarray,
+    ):
         self.prepend_poses = prepend_poses
         self.prepend_coords = prepend_coords
         self.prepend_vis = prepend_vis
         self.prepend_length = prepend_poses.shape[0]
         self.query_frames = query_frames
         self.prepend_init = True
-        
-    def set_queries(self, input_query: np.ndarray, query_sizes: np.ndarray, query_to_point_indexes: np.ndarray):
+
+    def set_queries(
+        self,
+        input_query: np.ndarray,
+        query_sizes: np.ndarray,
+        query_to_point_indexes: np.ndarray,
+    ):
         self.input_query = input_query
         self.query_lengths = query_sizes
         self.query_to_point_indexes = query_to_point_indexes
         self.num_query_points = input_query.shape[0]
         self.query_init = True
-        
+
     def set_cropping_info(self, bboxes: np.ndarray, scaling: np.ndarray):
         self.bboxes = bboxes
         self.scaling = scaling
@@ -153,14 +164,12 @@ class CoTrackerInput:
         flatten_query_to_point_indexes = self.query_to_point_indexes[:, 1].flatten()
         # Coords
         init_coords = np.zeros((self.prepend_length, self.num_query_points, 2))
-        init_coords[...] = self.prepend_coords[
-            :, flatten_query_to_point_indexes
-        ]
+        init_coords[...] = self.prepend_coords[:, flatten_query_to_point_indexes]
         # Visibility
         init_vis = np.zeros((self.prepend_length, self.num_query_points))
-        init_vis = (
-            self.prepend_vis[:, flatten_query_to_point_indexes] - 0.5
-        ) * (2 * self.init_value)
+        init_vis = (self.prepend_vis[:, flatten_query_to_point_indexes] - 0.5) * (
+            2 * self.init_value
+        )
         # Confidence
         init_confidence = np.zeros((self.prepend_length, self.num_query_points))
         init_confidence[...] = self.init_value
@@ -205,9 +214,26 @@ class CoPoseTracker:
     ):
         canonical_points = []
         canonical_lengths = []
+        # sift_lengths = []
+        # sift = cv2.SIFT_create()
         for pose in canonical_poses:
             rgb, depth, alpha = dataset.render_mesh_at_pose(pose)
+            # Get from canonical_point_sampler in grid
             points_3d = self.canonical_point_sampler(rgb, alpha, depth, pose, dataset.K)
+            # sift_original = sift.detect(rgb, None)
+            # sift_kp = np.array([k.pt for k in sift_original]).astype(np.int32)
+            # # Remove duplicate sift points
+            # sift_kp = np.unique(sift_kp, axis=0)
+            # sift_safe_3d, safe_mask = self.canonical_point_sampler.get_safe_3d_locations(
+            #     sift_kp, alpha, depth, pose, dataset.K
+            # )
+            # # DEBUG VIS
+            # # img = cv2.drawKeypoints(rgb, sift_original, None)
+            # # img_safe = cv2.drawKeypoints(rgb, itemgetter(*list(np.where(safe_mask)[0]))(sift_original), None)
+            
+            # sift_lengths.append(len(sift_safe_3d))
+            # points_3d = np.concatenate([points_3d, sift_safe_3d], axis=0)
+
             canonical_points.append(points_3d)
             canonical_lengths.append(len(points_3d))
         canonical_points = np.concatenate(canonical_points, axis=0)
@@ -286,7 +312,12 @@ class CoPoseTracker:
         cotracker_input: CoTrackerInput,
         canonical_lengths: np.ndarray,
     ):
-        query_frames, prepend_coords, prepend_vis, num_canonical_poses = cotracker_input.query_frames, cotracker_input.prepend_coords, cotracker_input.prepend_vis, len(canonical_lengths)
+        query_frames, prepend_coords, prepend_vis, num_canonical_poses = (
+            cotracker_input.query_frames,
+            cotracker_input.prepend_coords,
+            cotracker_input.prepend_vis,
+            len(canonical_lengths),
+        )
         input_query = []
         query_to_point = []
         # TODO: Not only should they be visible, they should also be in the "safe zone" as defined for the canonical points
@@ -296,13 +327,13 @@ class CoPoseTracker:
             original_points = prepend_coords[frame].copy()
             points = prepend_coords[frame].copy()
             visibility = prepend_vis[frame].copy()
-            
+
             # Don't add points outside the safe zone (unless it's a canonical pose, which we already verified)
             rgb = cotracker_input.get_rgb(frame)
             depth = cotracker_input.get_gt_depth(frame)
             alpha = (depth > 0).astype(int)
             bbox = cotracker_input.bboxes[frame]
-            
+
             rgb = rgb[bbox[1] : bbox[3], bbox[0] : bbox[2]]
             alpha = alpha[bbox[1] : bbox[3], bbox[0] : bbox[2]]
             depth = depth[bbox[1] : bbox[3], bbox[0] : bbox[2]]
@@ -311,20 +342,22 @@ class CoPoseTracker:
             rgb = cv2.resize(rgb, wh, interpolation=cv2.INTER_LINEAR)
             alpha = cv2.resize(alpha, wh, interpolation=cv2.INTER_NEAREST)
             depth = cv2.resize(depth, wh, interpolation=cv2.INTER_LINEAR)
-            safe_zone = self.canonical_point_sampler.get_safe_zone(alpha, depth) # H x W
+            safe_zone = self.canonical_point_sampler.get_safe_zone(
+                alpha, depth
+            )  # H x W
             safe_zone = safe_zone > 0
             if i < num_canonical_poses:
                 visibility[...] = 0
-                visibility[canonical_start:canonical_start + canonical_lengths[i]] = 1
+                visibility[canonical_start : canonical_start + canonical_lengths[i]] = 1
                 canonical_start += canonical_lengths[i]
             if i >= num_canonical_poses:
                 is_safe = safe_zone[points[:, 1].astype(int), points[:, 0].astype(int)]
                 visibility = visibility * is_safe
-            
+
             # Get idx of visible points
             visible_idx = visibility > 0
             points = points[visible_idx]
-            
+
             # DEBUG VIS
             # fig = plt.figure()
             # ax = fig.add_subplot(111)
@@ -337,7 +370,7 @@ class CoPoseTracker:
             #     if visible_idx[j]:
             #         ax.text(x, y, str(j), fontsize=8, color='white')
             # resulting_figure_post = plt.gcf()
-            
+
             # Prepend frame idx
             query_points = np.concatenate(
                 [np.ones((len(points), 1)) * frame, points], axis=1
@@ -355,8 +388,6 @@ class CoPoseTracker:
         return input_query, np.array(query_sizes), num_queries, query_to_point_indexes
 
 
-
-
 class CropCoPoseTracker(CoPoseTracker):
     def __call__(
         self,
@@ -369,7 +400,9 @@ class CropCoPoseTracker(CoPoseTracker):
         forced_vis: Optional[torch.Tensor] = None,
         forced_conf: Optional[torch.Tensor] = None,
     ):
-        cotracker_input = CoTrackerInput(dataset, init_value=self.init_value, limit=limit)
+        cotracker_input = CoTrackerInput(
+            dataset, init_value=self.init_value, limit=limit
+        )
         if canonical_poses is None:
             canonical_poses = self.get_canonical_poses(dataset.get_canonical_pose())
         if query_poses is None:
@@ -380,7 +413,9 @@ class CropCoPoseTracker(CoPoseTracker):
         if start_pose is None:
             start_pose = dataset.get_gt_pose(0)
         # Get canonical points
-        canonical_points, canonical_lengths = self.get_canonical_points(dataset, canonical_poses)
+        canonical_points, canonical_lengths = self.get_canonical_points(
+            dataset, canonical_poses
+        )
         cotracker_input.set_canonical_points(canonical_points)
         # Get prepend video
         prepend_coords, prepend_vis, prepend_poses, query_frames = (
@@ -391,7 +426,9 @@ class CropCoPoseTracker(CoPoseTracker):
                 start_pose,
             )
         )
-        cotracker_input.set_prepend_video(prepend_poses, prepend_coords, prepend_vis, query_frames)
+        cotracker_input.set_prepend_video(
+            prepend_poses, prepend_coords, prepend_vis, query_frames
+        )
         # Prepare CoTracker input data
         # - Prepare video input
         bboxes, scaling = self.create_video_input(cotracker_input)
@@ -513,13 +550,22 @@ class CropCoPoseTracker(CoPoseTracker):
             and forced_vis is not None
             and forced_conf is not None
         ):
-            if forced_coords.shape[2] < init_coords.shape[2] and forced_coords.shape[2] == input.num_canonical_points:
+            if (
+                forced_coords.shape[2] < init_coords.shape[2]
+                and forced_coords.shape[2] == input.num_canonical_points
+            ):
                 num_dynamic = input.query_lengths[-1]
                 dynamic_indexes = input.query_to_point_indexes[-num_dynamic:, 1]
-                forced_coords = torch.cat((forced_coords, forced_coords[:, :, dynamic_indexes]), dim=2)
-                forced_vis = torch.cat((forced_vis, forced_vis[:, :, dynamic_indexes]), dim=2)
-                forced_conf = torch.cat((forced_conf, forced_conf[:, :, dynamic_indexes]), dim=2)
-            
+                forced_coords = torch.cat(
+                    (forced_coords, forced_coords[:, :, dynamic_indexes]), dim=2
+                )
+                forced_vis = torch.cat(
+                    (forced_vis, forced_vis[:, :, dynamic_indexes]), dim=2
+                )
+                forced_conf = torch.cat(
+                    (forced_conf, forced_conf[:, :, dynamic_indexes]), dim=2
+                )
+
             init_coords = torch.cat((init_coords, forced_coords), dim=1)
             init_vis = torch.cat((init_vis, forced_vis), dim=1)
             init_confidence = torch.cat((init_confidence, forced_conf), dim=1)

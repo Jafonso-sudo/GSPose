@@ -40,6 +40,9 @@ class CameraInfo(NamedTuple):
     image_name: str
     width: int
     height: int
+    mask: np.array = None
+    depth: np.array = None
+    cad_depth: np.array = None
     cx_offset: np.array = 0
     cy_offset: np.array = 0
 
@@ -106,35 +109,49 @@ def readCameras(dataloader, zoom_scale=512, margin=0.0, frame_sample_interval=1)
         if frame_idx % frame_sample_interval != 0:
             continue
         obj_data = dataloader[frame_idx]
-        camK = np.array(obj_data['camK'])        
+        camK = np.array(obj_data['camK']) # 3x3       
         pose = np.array(obj_data['pose'])
         R = np.transpose(pose[:3,:3])  # R is stored transposed due to 'glm' in CUDA code
         T = pose[:3, 3]
 
-        if 'image_path' not in obj_data:
-            image_path = None
-            image = (obj_data['image'] * 255).numpy()
-            image = Image.fromarray(image.astype(np.uint8))
-            image_name = f'{frame_idx}.png'
-        else:
+        if 'image' not in obj_data:
             image_path = obj_data['image_path']
             image = Image.open(image_path)
             image_name = os.path.basename(image_path)
+        else:
+            image_path = None
+            image = (obj_data['image']).numpy()
+            image = Image.fromarray(image.astype(np.uint8))
+            image_name = f'{frame_idx}.png'
             
-        image = torch.from_numpy(np.array(image))
+        
+        # if 'image_path' not in obj_data: # This is what gets triggered for OnePose dataset
+        #     image_path = None
+        #     image = (obj_data['image'] * 255).numpy()
+        #     image = Image.fromarray(image.astype(np.uint8))
+        #     image_name = f'{frame_idx}.png'
+        # else: 
+        #     image_path = obj_data['image_path']
+        #     image = Image.open(image_path)
+        #     image_name = os.path.basename(image_path)
+            
+        image = torch.from_numpy(np.array(image)) # H x W x 3 [0, 255, uint8]
         raw_height, raw_width = image.shape[:2]
 
-        out = gs_utils.zoom_in_and_crop_with_offset(image, t=T, K=camK, 
-                                            radius=bbox3d_diameter/2, 
+        out = gs_utils.zoom_in_and_crop_with_offset(image, t=T, K=camK, # 1k on diag
+                                            radius=bbox3d_diameter/2, # ~0.27 / 2
                                             margin=margin, target_size=zoom_scale)
-        image = out['zoom_image'].squeeze()
+        image = out['zoom_image'].squeeze() # Absolute rubbish
         height, width = image.shape[:2]
 
         # if 'coseg_mask_path' not in obj_data:
             # mask = np.ones((height, width, 1), dtype=np.float32)
         try:
-            mask = Image.open(obj_data['coseg_mask_path'])
-            mask = torch.from_numpy(np.array(mask, dtype=np.float32)) / 255.0
+            if 'mask' not in obj_data:
+                mask = Image.open(obj_data['coseg_mask_path'])
+                mask = torch.from_numpy(np.array(mask, dtype=np.float32)) / 255.0
+            else:
+                mask = obj_data['mask']
             mask = gs_utils.zoom_in_and_crop_with_offset(
                 mask, t=T, K=camK, radius=bbox3d_diameter/2, 
                 margin=margin, target_size=zoom_scale
@@ -147,8 +164,26 @@ def readCameras(dataloader, zoom_scale=512, margin=0.0, frame_sample_interval=1)
             print(e)
             mask = np.ones((height, width, 1), dtype=np.float32)
         
-        image = (image * mask).type(torch.uint8).numpy()
+        image = (image * mask).type(torch.uint8).numpy() # Not rubbish anymore
         image = Image.fromarray(image.astype(np.uint8))
+        mask = mask.detach().cpu().numpy()
+        
+        # CAD depth
+        if 'cad_depth' in obj_data:
+            cad_depth = obj_data['cad_depth']
+            cad_depth = gs_utils.zoom_in_and_crop_with_offset(cad_depth, t=T, K=camK, 
+                                                radius=bbox3d_diameter/2, margin=margin, target_size=zoom_scale)['zoom_image'].squeeze()
+            cad_depth = cad_depth.detach().cpu().numpy()
+        else:
+            cad_depth = None
+        # Real depth
+        if 'depth' in obj_data:
+            depth = obj_data['depth']
+            depth = gs_utils.zoom_in_and_crop_with_offset(depth, t=T, K=camK, 
+                                                radius=bbox3d_diameter/2, margin=margin, target_size=zoom_scale)['zoom_image'].squeeze()
+            depth = depth.detach().cpu().numpy()
+        else:
+            depth = None
 
         zoom_camk = out['zoom_camK'].squeeze().numpy()
         zoom_offset = out['zoom_offset'].squeeze().numpy()
@@ -156,12 +191,14 @@ def readCameras(dataloader, zoom_scale=512, margin=0.0, frame_sample_interval=1)
         cy_offset = zoom_offset[1]
         cam_fx = zoom_camk[0, 0]
         cam_fy = zoom_camk[1, 1]
+        # cx_offset, cy_offset = camK[0, 2], camK[1, 2]
+        # cam_fx, cam_fy = camK[0, 0], camK[1, 1]
         FovX = focal2fov(cam_fx, width)
         FovY = focal2fov(cam_fy, height)
         
         cam_info = CameraInfo(R=R, T=T, FovY=FovY, FovX=FovX, 
                                 cx_offset=cx_offset, cy_offset=cy_offset,
-                                uid=frame_idx, image=image,
+                                uid=frame_idx, image=image, mask=mask, cad_depth=cad_depth, depth=depth,
                                 image_path=image_path, image_name=image_name, 
                                 width=width, height=height)
         cam_infos.append(cam_info)

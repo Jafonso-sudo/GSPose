@@ -96,32 +96,6 @@ class PnPSolver(Generic[T_Extra], ABC):
     def pose_and_render_points(points, R, T, K):
         return PnPSolver.render_points(PnPSolver.pose_points(points, R, T), K)
 
-
-class ePnP(PnPSolver[None]):
-    """
-    ePnP class that solves the Perspective-n-Point (PnP) problem using the built-in PyTorch3D ePnP implementation.
-    """
-
-    def __call__(
-        self,
-        Y: torch.Tensor,
-        weights: Optional[torch.Tensor] = None,
-        X: Optional[torch.Tensor] = None,
-        K: Optional[torch.Tensor] = None,
-        R: Optional[torch.Tensor] = None,
-        T: Optional[torch.Tensor] = None,
-    ) -> "tuple[torch.Tensor, torch.Tensor, None]":
-        X, Y, K, weights, R, T, B, Q = self._input_parser(X, Y, K, weights, R, T)
-
-        Y_h = torch.cat((Y, torch.ones(B, Q, 1, device=Y.device)), dim=-1)
-        K_inv = torch.inverse(K).transpose(1, 2)
-        Y_uncal = torch.matmul(Y_h, K_inv)
-
-        transform = efficient_pnp(X, Y_uncal[..., :2], weights=weights)
-
-        return transform.R.transpose(1, 2), transform.T, None
-
-
 class OpenCVePnP(PnPSolver[None]):
     """
     OpenCVePnP class that solves the Perspective-n-Point (PnP) problem using the built-in OpenCV ePnP implementation.
@@ -234,69 +208,6 @@ class OpenCVePnP(PnPSolver[None]):
             
         
         return torch.stack(all_R), torch.stack(all_T), torch.stack(errors)
-
-
-class RANSACePnP(PnPSolver[None]):
-    """
-    RANSACePnP class that solves the Perspective-n-Point (PnP) problem using RANSAC combined with the built-in PyTorch3D ePnP implementation
-    """
-
-    def __init__(self, num_iterations: int = 10, subset_size: int = 6):
-        self.num_iterations = num_iterations
-        self.subset_size = subset_size
-
-    def __call__(
-        self,
-        Y: torch.Tensor,
-        weights: Optional[torch.Tensor] = None,
-        X: Optional[torch.Tensor] = None,
-        K: Optional[torch.Tensor] = None,
-        R: Optional[torch.Tensor] = None,
-        T: Optional[torch.Tensor] = None,
-    ) -> "tuple[torch.Tensor, torch.Tensor, None]":
-        X, Y, K, weights, R, T, B, Q = self._input_parser(X, Y, K, weights, R, T)
-
-        Y_h = torch.cat((Y, torch.ones(B, Q, 1, device=Y.device)), dim=-1)
-        K_inv = torch.inverse(K).transpose(1, 2)
-        Y_uncal = torch.matmul(Y_h, K_inv)
-
-        if weights is not None:
-            sorted_indices = torch.argsort(weights, descending=True)
-            sorted_confidence = torch.gather(weights, 1, sorted_indices)
-        else:
-            sorted_indices = torch.arange(Q, device=Y.device).unsqueeze(0).repeat(B, 1)
-            sorted_confidence = torch.ones_like(sorted_indices, device=Y.device)
-
-        best_rotation = torch.eye(3, device=Y.device).unsqueeze(0).repeat(B, 1, 1)
-        best_translation = torch.zeros(3, device=Y.device).unsqueeze(0).repeat(B, 1)
-        best_score = -torch.ones(B, device=Y.device) * 1e6
-
-        subset_size = min(self.subset_size, Q)
-        for _ in range(self.num_iterations):
-            # Weighted random sampling for the subset
-            subset_indices = torch.multinomial(
-                sorted_confidence, subset_size, replacement=False
-            )
-            subset_indices = torch.gather(sorted_indices, 1, subset_indices)
-
-            X_subset = torch.gather(X, 1, subset_indices.unsqueeze(-1).repeat(1, 1, 3))
-            Y_uncal_subset = torch.gather(
-                Y_uncal, 1, subset_indices.unsqueeze(-1).repeat(1, 1, 3)
-            )
-
-            transform = efficient_pnp(X_subset, Y_uncal_subset[..., :2])
-
-            X_projected = PnPSolver.pose_and_render_points(
-                X, transform.R.transpose(1, 2), transform.T, K
-            )[..., :2]
-            score = -torch.mean(weights * torch.norm(X_projected - Y, dim=-1), dim=-1)
-
-            improved_mask = score > best_score
-            best_rotation[improved_mask] = transform.R[improved_mask]
-            best_translation[improved_mask] = transform.T[improved_mask]
-            best_score[improved_mask] = score[improved_mask]
-
-        return best_rotation.transpose(1, 2), best_translation, None
 
 
 @dataclass

@@ -330,7 +330,7 @@ class CanonicalPointSampler:
         self.max_alpha_change = max_alpha_change
         self.depth_margin = depth_margin
         self.depth_change_threshold = depth_change_threshold
-        
+
     def get_safe_zone(self, alpha: np.ndarray, depth: np.ndarray) -> np.ndarray:
         """
         Get safe zone based on alpha and depth channels.
@@ -342,7 +342,9 @@ class CanonicalPointSampler:
         """
         alpha[alpha < self.threshold] = 0
         depth[alpha < self.threshold] = 0
-        safe_depth = get_boolean_mask(depth, self.depth_margin, self.depth_change_threshold)
+        safe_depth = get_boolean_mask(
+            depth, self.depth_margin, self.depth_change_threshold
+        )
         safe_alpha = get_boolean_mask(alpha, self.alpha_margin, self.max_alpha_change)
         safe_region = (
             # Depth is constant within a margin
@@ -352,10 +354,10 @@ class CanonicalPointSampler:
             # Alpha is constant within a margin
             & safe_alpha
         )
-        
+
         # For visualization/debugging purposes
         safe_vis = alpha.copy() * 255
-        safe_vis[~safe_region] //=2
+        safe_vis[~safe_region] //= 2
 
         return safe_region
 
@@ -373,9 +375,11 @@ class CanonicalPointSampler:
         sampled_pixels = sample_safe_zone(safe_region, self.min_pixel_distance)
 
         return sampled_pixels
-    
+
     @staticmethod
-    def get_3d_locations(sampled_pixels: np.ndarray, depth: np.ndarray, pose: np.ndarray, K: np.ndarray) -> np.ndarray:
+    def get_3d_locations(
+        sampled_pixels: np.ndarray, depth: np.ndarray, pose: np.ndarray, K: np.ndarray
+    ) -> np.ndarray:
         """
         Get 3D locations of the selected pixels.
         Args:
@@ -398,13 +402,32 @@ class CanonicalPointSampler:
             t = depth_value / pixel_ray_dir[2]
             point_3d = ray_origin + t * ray_direction
             intersections.append(point_3d)
-        
+
         intersections = np.array(intersections)
 
         return intersections
-        
-    
-    def __call__(self, rgb: np.ndarray, alpha: np.ndarray, depth: np.ndarray, pose: np.ndarray, K: np.ndarray) -> np.ndarray:
+
+    def get_safe_3d_locations(
+        self,
+        points_2d: np.ndarray,
+        alpha: np.ndarray,
+        depth: np.ndarray,
+        pose: np.ndarray,
+        K: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        safe_zone = self.get_safe_zone(alpha, depth) > 0
+        safe_points_mask = safe_zone[points_2d[:, 1].astype(int), points_2d[:, 0].astype(int)]
+        safe_points = points_2d[safe_points_mask]
+        return self.get_3d_locations(safe_points, depth, pose, K), safe_points_mask
+
+    def __call__(
+        self,
+        rgb: np.ndarray,
+        alpha: np.ndarray,
+        depth: np.ndarray,
+        pose: np.ndarray,
+        K: np.ndarray,
+    ) -> np.ndarray:
         """
         Select points based on alpha and depth channels.
         Args:
@@ -418,5 +441,5 @@ class CanonicalPointSampler:
         """
         pixel_locations = self.select_safe_pixels(alpha, depth)
         points_3d = self.get_3d_locations(pixel_locations, depth, pose, K)
-        
+
         return points_3d

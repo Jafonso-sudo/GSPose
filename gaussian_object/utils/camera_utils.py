@@ -8,7 +8,9 @@
 #
 # For inquiries contact  george.drettakis@inria.fr
 #
+from matplotlib import pyplot as plt
 import numpy as np
+import torch
 
 from gaussian_object.cameras import Camera
 from gaussian_object.utils.general_utils import PILtoTorch
@@ -43,17 +45,36 @@ def loadCam(args, id, cam_info, resolution_scale):
     gt_image = resized_image_rgb[:3, ...]
     loaded_mask = None
 
-    # if cam_info.mask is not None:
-    #     mask = PILtoTorch(cam_info.mask, resolution)
-    # else:
-    #     mask = torch.ones_like(gt_image)[..., 0][None]
+    if cam_info.mask is not None:
+        mask = torch.tensor(cam_info.mask).float()
+    else:
+        mask = torch.ones_like(gt_image)[..., 0][None]
+        
+    if cam_info.cad_depth is not None:
+        cad_depth = torch.tensor(cam_info.cad_depth).float()
+    else:
+        cad_depth = None
+        
+    if cam_info.depth is not None:
+        depth = torch.tensor(cam_info.depth).float()
+    else:
+        depth = None
     
     if resized_image_rgb.shape[1] == 4:
         loaded_mask = resized_image_rgb[3:4, ...]
+        
+    # VIS
+    # plt.imshow(gt_image.clone().detach().cpu().numpy().transpose(1, 2, 0))
+    # plt.imshow(mask.clone().detach().cpu().numpy(), alpha=0.5)
+    # # Save the figure
+    # plt.savefig('output_image_loadCam.png', format='png', bbox_inches='tight')  # You can change the filename and format if needed
+    # plt.close()  # Close the figure to free up memory
 
     return Camera(colmap_id=cam_info.uid, R=cam_info.R, T=cam_info.T, 
                   FoVx=cam_info.FovX, FoVy=cam_info.FovY, 
-                #   mask=mask,
+                  mask=mask,
+                  cad_depth=cad_depth,
+                  depth=depth,
                   cx_offset=cam_info.cx_offset, 
                   cy_offset=cam_info.cy_offset,
                   image=gt_image, gt_alpha_mask=loaded_mask,

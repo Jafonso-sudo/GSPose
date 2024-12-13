@@ -20,11 +20,13 @@ from gaussian_object.build_3DGaussianObject import create_3D_Gaussian_object
 from inference import (
     GS_Tracker,
     create_reference_database_from_RGB_images,
+    create_reference_database_from_RGB_images_YCB,
     multiple_initial_pose_inference,
     perform_segmentation_and_encoding,
     render_Gaussian_object_model_and_get_radii,
 )
 from model.network import model_arch as ModelNet
+from posingpixels.datasets import YCBinEOATDataset
 
 
 def load_model_net(ckpt_file: str, device: Optional[torch.device] = None):
@@ -78,6 +80,75 @@ def load_existing_gaussian_splat(
 
     return reference_database
 
+
+def create_or_load_gaussian_splat_from_ycbineoat(
+    dataset: YCBinEOATDataset,
+    model_net: ModelNet,
+    device: Optional[torch.device] = None,
+):
+    if not device:
+        device = torch.device("cuda")
+    obj_database_dir = dataset.object_dir
+    obj_database_path = os.path.join(obj_database_dir, "reference_database.pkl")
+    if not os.path.exists(obj_database_path):
+        reference_database = create_reference_database_from_RGB_images_YCB(model_net, dataset, device=device)
+        obj_bbox3D = torch.as_tensor(dataset.bbox, dtype=torch.float32)
+        bbox3d_diameter = torch.as_tensor(dataset.bbox_diameter, dtype=torch.float32)
+        reference_database["obj_bbox3D"] = obj_bbox3D
+        reference_database["bbox3d_diameter"] = bbox3d_diameter
+        
+        parser = ArgumentParser(description="Training script parameters")
+        ###### arguments for 3D-Gaussian Splatting Refiner ########
+        gaussian_ModelP = ModelParams(parser)
+        gaussian_PipeP = PipelineParams(parser)
+        gaussian_OptimP = OptimizationParams(parser)
+        # gaussian_BG = torch.zeros((3), device=device)
+
+        if "ipykernel_launcher.py" in sys.argv[0] or "create_object.py" in sys.argv[0]:
+            args = parser.parse_args(sys.argv[3:])  # if run in ipython notebook
+        else:
+            args = parser.parse_args()  # if run in terminal
+
+        print(f"Creating 3D-OGS model for {dataset.videoname_to_object[dataset.video_name]} ")
+        gs_pipeData = gaussian_PipeP.extract(args)
+        gs_modelData = gaussian_ModelP.extract(args)
+        gs_optimData = gaussian_OptimP.extract(args)
+
+        gs_modelData.model_path = obj_database_dir
+        gs_modelData.referloader = dataset
+        gs_modelData.queryloader = dataset
+
+        obj_gaussians = create_3D_Gaussian_object(
+            gs_modelData, gs_optimData, gs_pipeData, return_gaussian=True
+        )
+
+        reference_database["obj_gaussians_path"] = f"{obj_database_dir}/3DGO_model.ply"
+
+        for _key, _val in reference_database.items():
+            if isinstance(_val, torch.Tensor):
+                reference_database[_key] = _val.detach().cpu().numpy()
+        with open(obj_database_path, "wb") as df:
+            pickle.dump(reference_database, df)
+        print("save database to ", obj_database_path)
+
+    print("Load database from ", obj_database_path)
+    with open(obj_database_path, "rb") as df:
+        reference_database = pickle.load(df)
+
+    for _key, _val in reference_database.items():
+        if isinstance(_val, np.ndarray):
+            reference_database[_key] = torch.as_tensor(_val, dtype=torch.float32).to(
+                device
+            )
+
+    gs_ply_path = reference_database["obj_gaussians_path"]
+    obj_gaussians = GaussianModel(sh_degree=3)
+    obj_gaussians.load_ply(gs_ply_path)
+    print("load 3D-OGS model from ", gs_ply_path)
+    reference_database["obj_gaussians"] = obj_gaussians
+
+    return reference_database
+        
 
 def create_or_load_gaussian_splat_from_images(
     demo_data_dir: str,

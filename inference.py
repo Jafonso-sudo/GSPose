@@ -1,5 +1,7 @@
 import os
 import torch
+
+from posingpixels.datasets import YCBinEOATDataset
 gpu_id = 0
 os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
@@ -46,6 +48,138 @@ gaussian_ModelP = ModelParams(parser)
 gaussian_PipeP = PipelineParams(parser)
 gaussian_OptimP = OptimizationParams(parser)
 gaussian_BG = torch.zeros((3), device=device)
+
+def create_reference_database_from_RGB_images_YCB(model_func, obj_dataset: YCBinEOATDataset, device):
+    obj_poses = np.stack(obj_dataset.poses, axis=0)
+    if CFG.USE_ALLOCENTRIC:
+        allo_poses = [gs_utils.egocentric_to_allocentric(pose) for pose in obj_poses]
+        obj_poses = np.stack(allo_poses, axis=0)
+
+    obj_poses = torch.as_tensor(obj_poses, dtype=torch.float32).to(device)
+    obj_matRs = obj_poses[:, :3, :3]
+    obj_vecRs = obj_matRs[:, 2, :3]
+    fps_inds = py3d_ops.sample_farthest_points(
+        obj_vecRs[None, :, :], K=CFG.refer_view_num, random_start_point=False)[1].squeeze(0)  # obtain the FPS indices
+    print("FPS indices: ", fps_inds)
+    ref_fps_images = list()
+    ref_fps_poses = list()
+    ref_fps_camKs = list()
+    ref_fps_gt_masks = list()
+    for ref_idx in fps_inds:
+        view_idx = ref_idx.item()
+        datum = obj_dataset[view_idx]
+        camK = datum['camK']      # 3x3
+        image = datum['image']    # HxWx3
+        pose = datum.get('allo_pose', datum['pose']) # 4x4
+        ref_fps_images.append(image)
+        ref_fps_poses.append(pose)
+        ref_fps_camKs.append(camK)
+        gt_mask = datum["mask"]
+        ref_fps_gt_masks.append(gt_mask)
+    ref_fps_poses = torch.stack(ref_fps_poses, dim=0)
+    ref_fps_camKs = torch.stack(ref_fps_camKs, dim=0)
+    ref_fps_images = torch.stack(ref_fps_images, dim=0)
+    zoom_fps_outp = gs_utils.zoom_in_and_crop_with_offset(image=ref_fps_images, # KxHxWx3 -> KxSxSx3
+                                                                K=ref_fps_camKs, 
+                                                                t=ref_fps_poses[:, :3, 3], 
+                                                                radius=obj_dataset.bbox3d_diameter/2,
+                                                                target_size=CFG.zoom_image_scale, 
+                                                                margin=CFG.zoom_image_margin)
+    zoom_fps_images = zoom_fps_outp['zoom_image'] # KxSxSx3
+    
+    ref_fps_gt_masks = torch.stack(ref_fps_gt_masks, dim=0).unsqueeze(-1)
+    zoom_gt_mask = gs_utils.zoom_in_and_crop_with_offset(image=ref_fps_gt_masks, # KxHxWx1 -> KxSxS
+                                                        K=ref_fps_camKs,
+                                                        t=ref_fps_poses[:, :3, 3],
+                                                        radius=obj_dataset.bbox3d_diameter/2,
+                                                        target_size=CFG.zoom_image_scale,
+                                                        margin=CFG.zoom_image_margin)['zoom_image']
+    ref_fps_gt_masks = zoom_gt_mask
+    
+    with torch.no_grad():
+        if zoom_fps_images.shape[-1] == 3:
+            zoom_fps_images = zoom_fps_images.permute(0, 3, 1, 2)
+        obj_fps_feats, _, obj_fps_dino_tokens = model_func.extract_DINOv2_feature(zoom_fps_images.to(device), return_last_dino_feat=True) # Kx768x16x16
+        
+        obj_fps_masks = ref_fps_gt_masks.permute(0, 3, 1, 2).to(device) # Kx1xSxS
+
+        obj_token_masks = torch_F.interpolate(obj_fps_masks,
+                                             scale_factor=1.0/model_func.dino_patch_size, 
+                                             mode='bilinear', align_corners=True, recompute_scale_factor=True) # Kx1xS/14xS/14
+        obj_fps_dino_tokens = obj_fps_dino_tokens.flatten(0, 1)[obj_token_masks.view(-1).round().type(torch.bool), :] # KxLxC -> KLxC -> MxC
+
+    refer_allo_Rs = list()
+    refer_pred_masks = list()
+    refer_Remb_vectors = list()
+    refer_coseg_mask_info = list()
+    num_instances = len(obj_dataset)
+    for idx in range(num_instances):
+        ref_data = obj_dataset[idx]
+        camK = ref_data['camK']
+        image = ref_data['image']
+        pose = ref_data.get('allo_pose', ref_data['pose']) # 4x4
+        refer_allo_Rs.append(pose[:3, :3])
+        ref_tz = (1 + CFG.zoom_image_margin) * camK[:2, :2].max() * obj_dataset.bbox3d_diameter / CFG.zoom_image_scale
+        zoom_outp = gs_utils.zoom_in_and_crop_with_offset(image=image, # HxWx3 -> SxSx3
+                                                            K=camK, 
+                                                            t=pose[:3, 3], 
+                                                            radius=obj_dataset.bbox3d_diameter/2,
+                                                            target_size=CFG.zoom_image_scale, 
+                                                            margin=CFG.zoom_image_margin) # SxSx3
+        with torch.no_grad():
+            zoom_image = zoom_outp['zoom_image'].unsqueeze(0)
+            if zoom_image.shape[-1] == 3:
+                zoom_image = zoom_image.permute(0, 3, 1, 2)
+            zoom_feat = model_func.extract_DINOv2_feature(zoom_image.to(device))
+            
+            gt_mask = ref_data["mask"]
+            zoom_mask = gs_utils.zoom_in_and_crop_with_offset(image=gt_mask.unsqueeze(0).unsqueeze(-1),
+                                                                K=camK,
+                                                                t=pose[:3, 3],
+                                                                radius=obj_dataset.bbox3d_diameter/2,
+                                                                target_size=CFG.zoom_image_scale,
+                                                                margin=CFG.zoom_image_margin)['zoom_image'].permute(0, 3, 1, 2).to(device)
+            
+            y_Remb = model_func.generate_rotation_aware_embedding(zoom_feat, zoom_mask)
+            refer_Remb_vectors.append(y_Remb.squeeze(0)) # 64
+            try:
+                msk_yy, msk_xx = torch.nonzero(zoom_mask.detach().cpu().squeeze().round().type(torch.uint8), as_tuple=True)
+                msk_cx = (msk_xx.max() + msk_xx.min()) / 2
+                msk_cy = (msk_yy.max() + msk_yy.min()) / 2
+            except: # no mask is found
+                msk_cx = CFG.zoom_image_scale / 2
+                msk_cy = CFG.zoom_image_scale / 2
+
+            prob_mask_area = zoom_mask.detach().cpu().sum()
+            bin_mask_area = zoom_mask.round().detach().cpu().sum()            
+            refer_coseg_mask_info.append(torch.tensor([msk_cx, msk_cy, ref_tz, bin_mask_area, prob_mask_area]))
+
+        refer_pred_masks.append(zoom_mask.detach().cpu().squeeze()) # SxS
+
+        if (idx + 1) % 100 == 0:
+            time_stamp = time.strftime('%d-%H:%M:%S', time.localtime())
+            print('[{}/{}], {}'.format(idx+1, num_instances, time_stamp))
+
+    refer_allo_Rs = torch.stack(refer_allo_Rs, dim=0).squeeze() # Nx3x3
+    refer_Remb_vectors = torch.stack(refer_Remb_vectors, dim=0).squeeze()      # Nx64
+    refer_coseg_mask_info = torch.stack(refer_coseg_mask_info, dim=0).squeeze() # Nx3
+    
+    ref_database = dict()
+    refer_pred_masks = torch.stack(refer_pred_masks, dim=0).squeeze() # NxSxS
+    ref_database['refer_pred_masks'] = refer_pred_masks
+
+    ref_database['obj_fps_inds'] = fps_inds
+    # ref_database['obj_fps_images'] = zoom_fps_images
+
+    ref_database['obj_fps_feats'] = obj_fps_feats
+    ref_database['obj_fps_masks'] = obj_fps_masks
+    ref_database['obj_fps_dino_tokens'] = obj_fps_dino_tokens
+
+    ref_database['refer_allo_Rs'] = refer_allo_Rs
+    ref_database['refer_Remb_vectors'] = refer_Remb_vectors
+    ref_database['refer_coseg_mask_info'] = refer_coseg_mask_info
+    
+    return ref_database
 
 def create_reference_database_from_RGB_images(model_func, obj_dataset, device, save_pred_mask=False):
     use_sam2_mask = obj_dataset.use_sam2 if hasattr(obj_dataset, 'use_sam2') else False

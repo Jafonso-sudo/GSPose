@@ -41,6 +41,7 @@ class ModelRendererOffscreen:
         if mesh is not None:
             mesh = mesh.copy()
             mesh.apply_transform(cvcam_in_glcam @ ob_in_cvcam)
+            assert hasattr(mesh, 'visual') and hasattr(mesh.visual, 'material')
             mesh = pyrender.Mesh.from_trimesh(mesh, smooth=False)
             mesh_node = self.scene.add(
                 mesh, pose=np.eye(4), name="ob"

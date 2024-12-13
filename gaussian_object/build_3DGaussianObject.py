@@ -3,7 +3,7 @@
 # GRAPHDECO research group, https://team.inria.fr/graphdeco
 # All rights reserved.
 #
-# This software is free for non-commercial, research and evaluation use 
+# This software is free for non-commercial, research and evaluation use
 # under the terms of the LICENSE.md file.
 #
 # For inquiries contact  george.drettakis@inria.fr
@@ -13,18 +13,22 @@ import os
 import sys
 import glob
 import uuid
+from matplotlib import pyplot as plt
 import torch
 from tqdm import tqdm
 from random import randint
 from argparse import ArgumentParser, Namespace
 from PIL import Image
+
 try:
     from torch.utils.tensorboard import SummaryWriter
+
     TENSORBOARD_FOUND = True
 except ImportError:
     TENSORBOARD_FOUND = False
 
 from gaussian_object.utils.image_utils import psnr
+
 # from gaussian_object.utils.general_utils import safe_state
 # from gaussian_object.gaussian_renderer import network_gui
 from gaussian_object.gaussian_renderer import render
@@ -37,13 +41,17 @@ from gaussian_object.arguments import ModelParams, PipelineParams, OptimizationP
 
 
 # def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
-def create_3D_Gaussian_object(dataset, opt, pipe, testing_iterations=[30_000], 
-                                 saving_iterations=[30_000], 
-                                 checkpoint_iterations=[], 
-                                 checkpoint=None, 
-                                 debug_from=-1,
-                                 return_gaussian=True,
-                                 ):
+def create_3D_Gaussian_object(
+    dataset,
+    opt,
+    pipe,
+    testing_iterations=[30_000],
+    saving_iterations=[30_000],
+    checkpoint_iterations=[],
+    checkpoint=None,
+    debug_from=-1,
+    return_gaussian=True,
+):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree)
@@ -56,15 +64,16 @@ def create_3D_Gaussian_object(dataset, opt, pipe, testing_iterations=[30_000],
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
-    iter_start = torch.cuda.Event(enable_timing = True)
-    iter_end = torch.cuda.Event(enable_timing = True)
+    iter_start = torch.cuda.Event(enable_timing=True)
+    iter_end = torch.cuda.Event(enable_timing=True)
 
     viewpoint_stack = None
     ema_loss_for_log = 0.0
-    progress_bar = tqdm(range(first_iter, opt.iterations), desc="3DGO modeling progress")
+    progress_bar = tqdm(
+        range(first_iter, opt.iterations), desc="3DGO modeling progress"
+    )
     first_iter += 1
-    for iteration in range(first_iter, opt.iterations + 1):        
-        
+    for iteration in range(first_iter, opt.iterations + 1):
         # if network_gui.conn == None:
         #     network_gui.try_connect()
         # while network_gui.conn != None:
@@ -91,7 +100,7 @@ def create_3D_Gaussian_object(dataset, opt, pipe, testing_iterations=[30_000],
         # Pick a random Camera
         if not viewpoint_stack:
             viewpoint_stack = scene.getTrainCameras().copy()
-        viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
+        viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack) - 1))
 
         # Render
         if (iteration - 1) == debug_from:
@@ -100,23 +109,83 @@ def create_3D_Gaussian_object(dataset, opt, pipe, testing_iterations=[30_000],
         bg = torch.rand((3), device="cuda") if opt.random_background else background
 
         render_pkg = render(viewpoint_cam, gaussians, pipe, bg)
-        image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+        image, viewspace_point_tensor, visibility_filter, radii = (
+            render_pkg["render"],
+            render_pkg["viewspace_points"],
+            render_pkg["visibility_filter"],
+            render_pkg["radii"],
+        )
+        
+        
 
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
 
         trunc_FG_mask = (gt_image.sum(dim=0, keepdim=True) > 0).type(torch.float32)
+        mask = viewpoint_cam.mask.type(torch.float32).cuda()
+        mask[mask < 0.7] = 0.0
+        mask = mask[..., 0].unsqueeze(0)
+
+        gt_depth = viewpoint_cam.depth.type(torch.float32).unsqueeze(0).cuda()
+        pred_depth = render_pkg["depth"]
+
+        def normalize_depth(depth, mask):
+            M = torch.sum(mask > 0)
+            med = torch.median(depth[mask > 0])
+            depth = depth - med
+            depth = (M * depth) / torch.sum(torch.abs(depth[mask > 0]))
+
+            return depth
+
+        norm_gt_depth = normalize_depth(gt_depth, mask * (gt_depth > 0))
+        norm_pred_depth = normalize_depth(pred_depth, mask * (pred_depth > 0)) if torch.any(pred_depth > 0) else 1.0
+
+        cad_depth = viewpoint_cam.cad_depth
+        cad_alpha = (cad_depth > 0).type(torch.float32)
+
+        max_alpha = torch.max(mask, cad_alpha)
         
+        # VIS
+        # plt.imshow(gt_image.clone().detach().cpu().numpy().transpose(1, 2, 0))
+        # plt.imshow(mask.clone().detach().cpu().numpy().transpose(1, 2, 0), alpha=0.5)
+        # # Save the figure
+        # plt.savefig('output_image.png', format='png', bbox_inches='tight')  # You can change the filename and format if needed
+        # plt.close()  # Close the figure to free up memory
+
         # Ll1 = l1_loss(image, gt_image)
         # loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
         # TODO: Introduce alpha in the loss function. How? The alpha should be similar to the mask in the image
         # i.e. where there is the object, the alpha should be 1, and where there is no object, the alpha should be 0.
         alpha = render_pkg["alpha"]
-        alpha_lambda = 0.0
-        alpha_loss = torch.abs(alpha - trunc_FG_mask).mean()
-        Ll1 = (l1_loss(image, gt_image, size_average=True) * trunc_FG_mask).mean()
-        ssim_score = (ssim(image, gt_image, size_average=True) * trunc_FG_mask).mean()
-        loss = (1.0 - opt.lambda_dssim - alpha_lambda) * Ll1 + opt.lambda_dssim * (1.0 - ssim_score) + alpha_lambda * alpha_loss
+        alpha_lambda = opt.lambda_silhouette
+        depth_lambda = opt.lambda_depth
+        # alpha_reg_lambda = opt.lambda_silhouette / 4
+
+        alpha_loss = torch.nn.functional.binary_cross_entropy(
+            alpha, max_alpha, reduction="mean"
+        )  # TODO: This would be ideal, if the CAD matched the geometry better
+        alpha_reg_loss = torch.mean(alpha)
+        # alpha_loss = (
+        #     torch.nn.functional.binary_cross_entropy(alpha, mask, reduction="none")
+        #     * mask
+        # ).mean()
+
+        depth_loss = (torch.abs(norm_gt_depth - norm_pred_depth) * mask * (gt_depth > 0)).mean()
+
+        Ll1 = (l1_loss(image, gt_image, size_average=False) * mask).mean()
+
+        ssim_score = (ssim(image, gt_image, size_average=False) * mask).mean()
+
+        loss = (
+            (
+                1.0 - opt.lambda_dssim - alpha_lambda - depth_lambda
+            )  # - alpha_reg_lambda)
+            * Ll1
+            + opt.lambda_dssim * (1.0 - ssim_score)
+            + alpha_lambda * alpha_loss
+            + depth_lambda * depth_loss
+            # + alpha_reg_lambda * alpha_reg_loss
+        )
 
         loss.backward()
         iter_end.record()
@@ -131,8 +200,19 @@ def create_3D_Gaussian_object(dataset, opt, pipe, testing_iterations=[30_000],
                 progress_bar.close()
 
             # Log and save
-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
-            if (iteration in saving_iterations):
+            training_report(
+                tb_writer,
+                iteration,
+                Ll1,
+                loss,
+                l1_loss,
+                iter_start.elapsed_time(iter_end),
+                testing_iterations,
+                scene,
+                render,
+                (pipe, background),
+            )
+            if iteration in saving_iterations:
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
             # # Save the gt_image used to compare with the rendered image as a png
@@ -152,50 +232,68 @@ def create_3D_Gaussian_object(dataset, opt, pipe, testing_iterations=[30_000],
             # image = (image * 255).byte().permute(1, 2, 0).contiguous().cpu().numpy()
             # image = Image.fromarray(image)
             # image.save(scene.model_path + "/rendered_image" + str(iteration) + ".png")
-                
-                
 
             # Densification
             if iteration < opt.densify_until_iter:
                 # Keep track of max radii in image-space for pruning
-                gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
-                gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+                gaussians.max_radii2D[visibility_filter] = torch.max(
+                    gaussians.max_radii2D[visibility_filter], radii[visibility_filter]
+                )
+                gaussians.add_densification_stats(
+                    viewspace_point_tensor, visibility_filter
+                )
 
-                if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
-                    size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold)
-                
-                if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
+                if (
+                    iteration > opt.densify_from_iter
+                    and iteration % opt.densification_interval == 0
+                ):
+                    size_threshold = (
+                        20 if iteration > opt.opacity_reset_interval else None
+                    )
+                    gaussians.densify_and_prune(
+                        opt.densify_grad_threshold,
+                        0.005,
+                        scene.cameras_extent,
+                        size_threshold,
+                    )
+
+                if iteration % opt.opacity_reset_interval == 0 or (
+                    dataset.white_background and iteration == opt.densify_from_iter
+                ):
                     gaussians.reset_opacity()
 
             # Optimizer step
             if iteration < opt.iterations:
                 gaussians.optimizer.step()
-                gaussians.optimizer.zero_grad(set_to_none = True)
+                gaussians.optimizer.zero_grad(set_to_none=True)
 
-            if (iteration in checkpoint_iterations):
+            if iteration in checkpoint_iterations:
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
-                torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
+                torch.save(
+                    (gaussians.capture(), iteration),
+                    scene.model_path + "/chkpnt" + str(iteration) + ".pth",
+                )
 
     if return_gaussian:
         return gaussians
 
-def prepare_output_and_logger(args):    
+
+def prepare_output_and_logger(args):
     if not args.model_path:
-        if os.getenv('OAR_JOB_ID'):
-            unique_str=os.getenv('OAR_JOB_ID')
+        if os.getenv("OAR_JOB_ID"):
+            unique_str = os.getenv("OAR_JOB_ID")
         else:
             unique_str = str(uuid.uuid4())
         args.model_path = os.path.join("./output/", unique_str[0:10])
-        
+
     # Set up output folder
     print("Output folder: {}".format(args.model_path))
-    logs_file = f'{args.model_path}/events.out.tfevents.*'
+    logs_file = f"{args.model_path}/events.out.tfevents.*"
     if len(glob.glob(logs_file)) > 0:
-        os.system(f"rm -r {logs_file}") # remove the old events
+        os.system(f"rm -r {logs_file}")  # remove the old events
 
-    os.makedirs(args.model_path, exist_ok = True)
-    with open(os.path.join(args.model_path, "cfg_args"), 'w') as cfg_log_f:
+    os.makedirs(args.model_path, exist_ok=True)
+    with open(os.path.join(args.model_path, "cfg_args"), "w") as cfg_log_f:
         cfg_log_f.write(str(Namespace(**vars(args))))
 
     # Create Tensorboard writer
@@ -206,40 +304,87 @@ def prepare_output_and_logger(args):
         print("Tensorboard not available: not logging progress")
     return tb_writer
 
-def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs):
+
+def training_report(
+    tb_writer,
+    iteration,
+    Ll1,
+    loss,
+    l1_loss,
+    elapsed,
+    testing_iterations,
+    scene: Scene,
+    renderFunc,
+    renderArgs,
+):
     if tb_writer:
-        tb_writer.add_scalar('train_loss_patches/l1_loss', Ll1.item(), iteration)
-        tb_writer.add_scalar('train_loss_patches/total_loss', loss.item(), iteration)
-        tb_writer.add_scalar('iter_time', elapsed, iteration)
+        tb_writer.add_scalar("train_loss_patches/l1_loss", Ll1.item(), iteration)
+        tb_writer.add_scalar("train_loss_patches/total_loss", loss.item(), iteration)
+        tb_writer.add_scalar("iter_time", elapsed, iteration)
 
     # Report test and samples of training set
     if iteration in testing_iterations:
         torch.cuda.empty_cache()
-        validation_configs = ({'name': 'test', 'cameras' : scene.getTestCameras()}, 
-                              {'name': 'train', 'cameras' : [scene.getTrainCameras()[idx % len(scene.getTrainCameras())] for idx in range(5, 30, 5)]})
+        validation_configs = (
+            {"name": "test", "cameras": scene.getTestCameras()},
+            {
+                "name": "train",
+                "cameras": [
+                    scene.getTrainCameras()[idx % len(scene.getTrainCameras())]
+                    for idx in range(5, 30, 5)
+                ],
+            },
+        )
 
         for config in validation_configs:
-            if config['cameras'] and len(config['cameras']) > 0:
+            if config["cameras"] and len(config["cameras"]) > 0:
                 l1_test = 0.0
                 psnr_test = 0.0
-                for idx, viewpoint in enumerate(config['cameras']):
-                    image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs)["render"], 0.0, 1.0)
-                    gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
+                for idx, viewpoint in enumerate(config["cameras"]):
+                    image = torch.clamp(
+                        renderFunc(viewpoint, scene.gaussians, *renderArgs)["render"],
+                        0.0,
+                        1.0,
+                    )
+                    gt_image = torch.clamp(
+                        viewpoint.original_image.to("cuda"), 0.0, 1.0
+                    )
                     if tb_writer and (idx < 5):
-                        tb_writer.add_images(config['name'] + "_view_{}/render".format(viewpoint.image_name), image[None], global_step=iteration)
+                        tb_writer.add_images(
+                            config["name"]
+                            + "_view_{}/render".format(viewpoint.image_name),
+                            image[None],
+                            global_step=iteration,
+                        )
                         if iteration == testing_iterations[0]:
-                            tb_writer.add_images(config['name'] + "_view_{}/ground_truth".format(viewpoint.image_name), gt_image[None], global_step=iteration)
+                            tb_writer.add_images(
+                                config["name"]
+                                + "_view_{}/ground_truth".format(viewpoint.image_name),
+                                gt_image[None],
+                                global_step=iteration,
+                            )
                     l1_test += l1_loss(image, gt_image).mean().double()
                     psnr_test += psnr(image, gt_image).mean().double()
-                psnr_test /= len(config['cameras'])
-                l1_test /= len(config['cameras'])          
-                print("\n[ITER {}] Evaluating {}: L1 {} PSNR {}".format(iteration, config['name'], l1_test, psnr_test))
+                psnr_test /= len(config["cameras"])
+                l1_test /= len(config["cameras"])
+                print(
+                    "\n[ITER {}] Evaluating {}: L1 {} PSNR {}".format(
+                        iteration, config["name"], l1_test, psnr_test
+                    )
+                )
                 if tb_writer:
-                    tb_writer.add_scalar(config['name'] + '/loss_viewpoint - l1_loss', l1_test, iteration)
-                    tb_writer.add_scalar(config['name'] + '/loss_viewpoint - psnr', psnr_test, iteration)
+                    tb_writer.add_scalar(
+                        config["name"] + "/loss_viewpoint - l1_loss", l1_test, iteration
+                    )
+                    tb_writer.add_scalar(
+                        config["name"] + "/loss_viewpoint - psnr", psnr_test, iteration
+                    )
 
         if tb_writer:
-            tb_writer.add_histogram("scene/opacity_histogram", scene.gaussians.get_opacity, iteration)
-            tb_writer.add_scalar('total_points', scene.gaussians.get_xyz.shape[0], iteration)
+            tb_writer.add_histogram(
+                "scene/opacity_histogram", scene.gaussians.get_opacity, iteration
+            )
+            tb_writer.add_scalar(
+                "total_points", scene.gaussians.get_xyz.shape[0], iteration
+            )
         torch.cuda.empty_cache()
-

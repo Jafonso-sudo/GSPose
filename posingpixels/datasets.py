@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 import glob
 
 from tqdm import tqdm
+from misc_utils.gs_utils import egocentric_to_allocentric
 from posingpixels.utils.offscreen_renderer import ModelRendererOffscreen
 import trimesh
 from posingpixels.utils.meshes import (
@@ -36,11 +37,22 @@ class YCBinEOATDataset(torch.utils.data.Dataset):
 
     videoname_to_sam_prompt = {"mustard0": [(124, 292), (135, 304), (156, 336)]}
 
-    def __init__(self, video_dir: str, object_dir: str, use_cad_rgb: bool = False):
+    def __init__(
+        self,
+        video_dir: str,
+        object_dir: str,
+        use_cad_rgb: bool = False,
+        use_cad_mask: bool = False,
+        mask_threshold=0.7,
+    ):
+        self.mask_threshold = mask_threshold
         # Video
         self.video_dir = video_dir
         self.video_rgb_dir = os.path.join(self.video_dir, "rgb")
         self.rgb_video_files = sorted(glob.glob(f"{self.video_dir}/rgb/*.png"))
+        self.depth_video_files = sorted(
+            glob.glob(f"{self.video_dir}/depth_filled/*.png")
+        )
         self.gt_pose_dir = os.path.join(self.video_dir, "annotated_poses")
         self.gt_pose_files = sorted(glob.glob(f"{self.video_dir}/annotated_poses/*"))
         self.gt_mask_files = sorted(glob.glob(f"{self.video_dir}/gt_mask/*"))
@@ -76,10 +88,68 @@ class YCBinEOATDataset(torch.utils.data.Dataset):
 
         # Experiments
         self.use_cad_rgb = use_cad_rgb
+        self.use_cad_mask = use_cad_mask
+        if use_cad_mask:
+            print(
+                "WARNING: Using CAD mask for YCBinEOATDataset. This is fine if being used to create a Gaussian Splat of the CAD, but not for running point tracker."
+            )
+
+        # GSPose support
+        self.obj_bbox3d = self.bbox.detach().cpu().numpy()
+        self.diameter = self.obj_diameter
+        self.bbox3d_diameter = torch.norm(self.obj_size).detach().cpu().numpy()
+        self.bbox_diameter = self.bbox3d_diameter
+        self.use_binarized_mask = False
 
     def reset_frame_range(self):
         self.start_frame = 0
         self.end_frame = self.max_frames
+
+    # For GSPose support
+    def __getitem__(self, idx):
+        data_dict = dict()
+        data_dict["camK"] = torch.tensor(self.K, dtype=torch.float32)
+        data_dict["pose"] = torch.tensor(self.get_gt_pose(idx), dtype=torch.float32)
+        data_dict["image"] = torch.tensor(self.get_rgb(idx), dtype=torch.float32)
+        data_dict["allo_pose"] = torch.tensor(
+            egocentric_to_allocentric(self.get_gt_pose(idx)), dtype=torch.float32
+        )
+
+        data_dict["image_ID"] = idx
+        data_dict["image_path"] = self.rgb_video_files[idx] if not self.use_cad_rgb else self.cad_rgb_files[idx]
+        data_dict["mask"] = torch.tensor(self.get_mask(idx), dtype=torch.float32)
+        data_dict["mask_path"] = self.mask_files[idx] if not self.use_cad_mask else self.cad_depth_files[idx]
+        data_dict["gt_mask_path"] = self.mask_files[idx] if not self.use_cad_mask else self.cad_depth_files[idx]
+        data_dict["coseg_mask_path"] = self.mask_files[idx] if not self.use_cad_mask else self.cad_depth_files[idx]
+
+        mask_binary = data_dict["mask"] > self.mask_threshold
+        x1 = torch.min(torch.where(mask_binary)[1]).item()
+        y1 = torch.min(torch.where(mask_binary)[0]).item()
+        x2 = torch.max(torch.where(mask_binary)[1]).item()
+        y2 = torch.max(torch.where(mask_binary)[0]).item()
+        data_dict["gt_bbox_scale"] = max(x2 - x1, y2 - y1)
+        data_dict["gt_bbox_center"] = torch.tensor(
+            [(x1 + x2) / 2, (y1 + y2) / 2], dtype=torch.float32
+        )
+
+        # Fix: To combat the fact that YCBinEOAT doesn't have training data from the real object
+        data_dict["cad_depth"] = torch.tensor(
+            self.get_cad_depth(idx), dtype=torch.float32
+        )
+
+        data_dict["depth"] = torch.tensor(self.get_depth(idx), dtype=torch.float32)
+
+        return data_dict
+
+    @property
+    def poses(self):
+        return self.get_gt_poses()
+
+    @property
+    def allo_poses(self):
+        return np.stack(
+            [egocentric_to_allocentric(pose) for pose in self.get_gt_poses()], axis=0
+        )
 
     @property
     def video_name(self):
@@ -117,6 +187,12 @@ class YCBinEOATDataset(torch.utils.data.Dataset):
             cv2.imread(self.rgb_video_files[idx], cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB
         )
 
+    def get_depth(self, idx: int) -> np.ndarray:
+        if self.use_cad_rgb:
+            return self.get_cad_depth(idx)
+        idx += self.start_frame
+        return cv2.imread(self.depth_video_files[idx], cv2.IMREAD_UNCHANGED) / 1e3
+
     def get_cad_rgb(self, idx: int) -> np.ndarray:
         idx += self.start_frame
         return cv2.cvtColor(
@@ -124,12 +200,16 @@ class YCBinEOATDataset(torch.utils.data.Dataset):
         )
 
     def get_mask(self, idx: int) -> np.ndarray:
+        if self.use_cad_mask:
+            return self.get_cad_depth(idx) > 0
         idx += self.start_frame
         return cv2.imread(self.mask_files[idx], cv2.IMREAD_GRAYSCALE) / 255
 
     def get_gt_mask(self, idx: int) -> np.ndarray:
+        if self.use_cad_mask:
+            return self.get_cad_depth(idx) > 0
         idx += self.start_frame
-        return cv2.imread(self.gt_mask_files[idx], cv2.IMREAD_GRAYSCALE)
+        return cv2.imread(self.gt_mask_files[idx], cv2.IMREAD_GRAYSCALE) / 255
 
     def get_cad_depth(self, idx: int) -> np.ndarray:
         idx += self.start_frame
@@ -138,11 +218,16 @@ class YCBinEOATDataset(torch.utils.data.Dataset):
         return np.array(depth_image).astype(np.float32)
 
     def render_mesh_at_pose(
-        self, pose: Optional[np.ndarray] = None, idx: Optional[int] = None
+        self,
+        pose: Optional[np.ndarray] = None,
+        idx: Optional[int] = None,
+        renderer=None,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         assert (pose is None) != (idx is None)
+        if renderer is None:
+            renderer = self.renderer
         pose = self.get_gt_pose(idx) if pose is None else pose
-        rgb, depth = self.renderer.render(pose, self.get_mesh())
+        rgb, depth = renderer.render(pose, self.get_mesh())
         alpha = (depth > 0).astype(float)
         return rgb, depth, alpha
 
@@ -152,7 +237,7 @@ class YCBinEOATDataset(torch.utils.data.Dataset):
         f_y = self.K[1, 1]
         c_x = self.K[0, 2]
         c_y = self.K[1, 2]
-        
+
         d_x = 2 * min(c_x, self.W - c_x - 1)
         d_y = 2 * min(c_y, self.H - c_y - 1)
 

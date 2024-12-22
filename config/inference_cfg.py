@@ -17,12 +17,18 @@ save_reference_mask = True
 ROT_TOPK = 1   # single rotation proposal
 
 WARMUP = 10
+
 END_LR = 0
 START_LR = 5e-3
 MAX_STEPS = 400
+
+# MAX_STEPS = 64
+# START_LR = 2e-3
+# END_LR = 1e-5
+
 GS_RENDER_SIZE = 224
 EARLY_STOP_MIN_STEPS = 5
-EARLY_STOP_LOSS_GRAD_NORM = 1e-4
+EARLY_STOP_LOSS_GRAD_NORM = 5e-5
 
 USE_SSIM = True
 USE_MS_SSIM = True

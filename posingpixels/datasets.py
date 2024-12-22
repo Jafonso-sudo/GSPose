@@ -1,3 +1,5 @@
+from abc import ABC, abstractmethod
+from enum import Enum
 import numpy as np
 from PIL import Image
 import torchvision.transforms as transforms
@@ -12,6 +14,7 @@ import glob
 
 from tqdm import tqdm
 from misc_utils.gs_utils import egocentric_to_allocentric
+from posingpixels.utils.gs_pose import create_or_load_gaussian_splat_from_ycbineoat, load_model_net, render_gaussian_model_with_info
 from posingpixels.utils.offscreen_renderer import ModelRendererOffscreen
 import trimesh
 from posingpixels.utils.meshes import (
@@ -21,7 +24,65 @@ from posingpixels.utils.meshes import (
 )
 from posingpixels.segmentation import segment
 
+proj_root = os.path.dirname(os.getcwd())
 
+class ModelType(Enum):
+    CAD = "CAD"
+    GAUSSIAN = "Gaussian Splat"
+
+class RenderableModel(ABC):
+    def __init__(self, obj_dir: str, K: np.ndarray, H: int, W: int):
+        self.obj_dir = obj_dir
+        self.K = K
+        self.H = H
+        self.W = W
+        
+    @abstractmethod
+    def render(self, pose: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Renders the given pose and returns the corresponding images.
+
+        Args:
+            pose (np.ndarray): The pose to be rendered.
+
+        Returns:
+            Tuple[np.ndarray, np.ndarray, np.ndarray]: A tuple containing three numpy arrays representing the RGB, alpha, depth images.
+        """
+        pass
+    
+class CADModel(RenderableModel):
+    def __init__(self, obj_dir: str, K: np.ndarray, H: int, W: int):
+        super().__init__(obj_dir, K, H, W)
+        self.renderer = ModelRendererOffscreen(K, H, W)
+        self.mesh = trimesh.load_mesh(os.path.join(obj_dir, "textured_simple.obj"))
+        self.obj_diameter = get_diameter_from_mesh(self.mesh)
+        self.obj_size = get_size_from_mesh(self.mesh)
+        self.bbox = get_bbox_from_size(self.obj_size)
+        
+    def render(self, pose: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        rgb, depth = self.renderer.render(pose, self.mesh)
+        alpha = (depth > 0).astype(float)
+        return rgb, depth, alpha
+    
+class GaussianSplatModel(RenderableModel):
+    def __init__(self, obj_dir: str, K: np.ndarray, H: int, W: int, dataset: "YCBinEOATDataset", device: torch.device):
+        super().__init__(obj_dir, K, H, W)
+        model_net = load_model_net(os.path.join(proj_root, "checkpoints/model_weights.pth"))
+        self.ref_database = create_or_load_gaussian_splat_from_ycbineoat(dataset, model_net, device=device)
+        self.gaussian_object = self.ref_database["obj_gaussians"]
+        
+    def render(self, pose: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        render = render_gaussian_model_with_info(
+            self.gaussian_object, self.K, self.H, self.W, R=pose[:3, :3], T=pose[:3, 3]
+        )
+
+        rgb = render['image']
+        depth = render['depth'][0].detach().cpu().numpy()
+        alpha = render['alpha'][0].detach().cpu().numpy()
+        
+        return rgb, depth, alpha
+        
+    
 class YCBinEOATDataset(torch.utils.data.Dataset):
     videoname_to_object = {
         "bleach0": "bleach_cleanser",
@@ -35,16 +96,35 @@ class YCBinEOATDataset(torch.utils.data.Dataset):
         "tomato_soup_can_yalehand0": "tomato_soup_can",
     }
 
-    videoname_to_sam_prompt = {"mustard0": [(124, 292), (135, 304), (156, 336)]}
+    videoname_to_sam_prompt = {
+        "bleach0": [(132, 351), (152, 327), (158, 368), (176, 405), (185, 417)],
+        "bleach_hard_00_03_chaitanya": [(112, 375), (120, 335), (143, 306), (165, 270)],
+        "cracker_box_reorient": [(125, 352), (170, 328), (153, 376), (143, 441), (197, 406)],
+        "cracker_box_yalehand0": [(306, 255), (363, 288), (318, 306), (294, 304), (363, 344)],
+        "mustard0": [(124, 292), (135, 304), (156, 336)],
+        "mustard_easy_00_02": [(169, 269), (140, 288), (120, 310)],
+        "sugar_box1": [(133, 362), (144, 381), (162, 403)],
+        "sugar_box_yalehand0": [(297, 238), (320, 261), (311, 279)],
+        "tomato_soup_can_yalehand0": [(336, 300), (351, 309)],
+    }
 
     def __init__(
         self,
         video_dir: str,
         object_dir: str,
+        model_type: ModelType = ModelType.CAD,
         use_cad_rgb: bool = False,
         use_cad_mask: bool = False,
         mask_threshold=0.7,
     ):
+        # Experiments
+        self.use_cad_rgb = use_cad_rgb
+        self.use_cad_mask = use_cad_mask
+        if use_cad_mask:
+            print(
+                "WARNING: Using CAD mask for YCBinEOATDataset. This is fine if being used to create a Gaussian Splat of the CAD, but not for running point tracker."
+            )
+        
         self.mask_threshold = mask_threshold
         # Video
         self.video_dir = video_dir
@@ -73,33 +153,37 @@ class YCBinEOATDataset(torch.utils.data.Dataset):
         self.start_frame = 0
         self.end_frame = self.max_frames
         # Object
+        
         self.object_dir = object_dir
         self.obj_path = os.path.join(self.object_dir, "textured_simple.obj")
         mesh = self.get_mesh()
         self.obj_diameter = get_diameter_from_mesh(mesh)
         self.obj_size = get_size_from_mesh(mesh)
         self.bbox = get_bbox_from_size(self.obj_size)
-        self.renderer = ModelRendererOffscreen(self.K, self.H, self.W)
+        
+        # CAD GT RGB and Depth
         self.cad_rgb_dir = os.path.join(self.video_dir, "cad_rgb")
         self.cad_depth_dir = os.path.join(self.video_dir, "cad_depth")
         self._render_cad_gt_rgb_and_depth()  # Get CAD GT RGB and Depth
         self.cad_rgb_files = sorted(glob.glob(f"{self.cad_rgb_dir}/*.png"))
         self.cad_depth_files = sorted(glob.glob(f"{self.cad_depth_dir}/*.tiff"))
-
-        # Experiments
-        self.use_cad_rgb = use_cad_rgb
-        self.use_cad_mask = use_cad_mask
-        if use_cad_mask:
-            print(
-                "WARNING: Using CAD mask for YCBinEOATDataset. This is fine if being used to create a Gaussian Splat of the CAD, but not for running point tracker."
-            )
-
+        
         # GSPose support
         self.obj_bbox3d = self.bbox.detach().cpu().numpy()
         self.diameter = self.obj_diameter
         self.bbox3d_diameter = torch.norm(self.obj_size).detach().cpu().numpy()
         self.bbox_diameter = self.bbox3d_diameter
         self.use_binarized_mask = False
+        
+        if model_type == ModelType.CAD:
+            self.model = CADModel(self.object_dir, self.K, self.H, self.W)
+        elif model_type == ModelType.GAUSSIAN:
+            self.model = GaussianSplatModel(self.object_dir, self.K, self.H, self.W, self, torch.device("cuda"))
+        else:
+            raise ValueError("Invalid model type")
+        
+        
+
 
     def reset_frame_range(self):
         self.start_frame = 0
@@ -221,15 +305,10 @@ class YCBinEOATDataset(torch.utils.data.Dataset):
         self,
         pose: Optional[np.ndarray] = None,
         idx: Optional[int] = None,
-        renderer=None,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         assert (pose is None) != (idx is None)
-        if renderer is None:
-            renderer = self.renderer
         pose = self.get_gt_pose(idx) if pose is None else pose
-        rgb, depth = renderer.render(pose, self.get_mesh())
-        alpha = (depth > 0).astype(float)
-        return rgb, depth, alpha
+        return self.model.render(pose)
 
     def _get_safe_distance(self):
         # TODO: Implement smallest distance from the camera to the object such that it is fully visible

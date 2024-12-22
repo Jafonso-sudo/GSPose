@@ -1,7 +1,7 @@
 import os
+from typing import TYPE_CHECKING
 import torch
 
-from posingpixels.datasets import YCBinEOATDataset
 gpu_id = 0
 os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
@@ -20,6 +20,7 @@ import torch.nn.functional as torch_F
 from torchvision.ops import roi_align
 from pytorch3d import ops as py3d_ops
 from pytorch_msssim import SSIM, MS_SSIM
+
 
 L1Loss = torch.nn.L1Loss(reduction='mean')
 SSIM_METRIC = SSIM(data_range=1, size_average=True, channel=3) # channel=1 for grayscale images
@@ -43,13 +44,16 @@ from gaussian_object.gaussian_model import GaussianModel
 from gaussian_object.arguments import ModelParams, PipelineParams, OptimizationParams
 from gaussian_object.build_3DGaussianObject import create_3D_Gaussian_object
 
+if TYPE_CHECKING:
+    from posingpixels.datasets import YCBinEOATDataset
+
 parser = ArgumentParser()
 gaussian_ModelP = ModelParams(parser)
 gaussian_PipeP = PipelineParams(parser)
 gaussian_OptimP = OptimizationParams(parser)
 gaussian_BG = torch.zeros((3), device=device)
 
-def create_reference_database_from_RGB_images_YCB(model_func, obj_dataset: YCBinEOATDataset, device):
+def create_reference_database_from_RGB_images_YCB(model_func, obj_dataset: "YCBinEOATDataset", device):
     obj_poses = np.stack(obj_dataset.poses, axis=0)
     if CFG.USE_ALLOCENTRIC:
         allo_poses = [gs_utils.egocentric_to_allocentric(pose) for pose in obj_poses]

@@ -207,6 +207,9 @@ def zoom_in_and_crop_with_offset(image, K, t, radius, target_size=224, margin=0,
         image.type(torch.float32), grids.type(torch.float32), mode=mode, align_corners=True)
     image_new = image_new.permute(0, 2, 3, 1)
     
+    image0 = image[0].cpu().numpy().astype(np.uint8).transpose(1, 2, 0)
+    image0_new = image_new[0].cpu().numpy().astype(np.uint8)
+    
     if unsqueeze:
         bbox_center = bbox_center.squeeze()
         bbox_scale = bbox_scale.squeeze()

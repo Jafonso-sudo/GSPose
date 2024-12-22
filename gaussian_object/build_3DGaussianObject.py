@@ -161,30 +161,34 @@ def create_3D_Gaussian_object(
         depth_lambda = opt.lambda_depth
         # alpha_reg_lambda = opt.lambda_silhouette / 4
 
-        alpha_loss = torch.nn.functional.binary_cross_entropy(
-            alpha, max_alpha, reduction="mean"
-        )  # TODO: This would be ideal, if the CAD matched the geometry better
+        # alpha_loss = torch.nn.functional.binary_cross_entropy(
+        #     alpha, max_alpha, reduction="mean"
+        # )  # TODO: This would be ideal, if the CAD matched the geometry better
         alpha_reg_loss = torch.mean(alpha)
-        # alpha_loss = (
-        #     torch.nn.functional.binary_cross_entropy(alpha, mask, reduction="none")
-        #     * mask
-        # ).mean()
+        alpha_loss = (
+            torch.nn.functional.binary_cross_entropy(alpha, mask, reduction="none")
+            * mask
+        ).mean()
 
         depth_loss = (torch.abs(norm_gt_depth - norm_pred_depth) * mask * (gt_depth > 0)).mean()
 
         Ll1 = (l1_loss(image, gt_image, size_average=False) * mask).mean()
 
-        ssim_score = (ssim(image, gt_image, size_average=False) * mask).mean()
+        Ldssim = ((1.0 - ssim(image, gt_image, size_average=False)) * mask).mean()
 
         loss = (
             (
-                1.0 - opt.lambda_dssim - alpha_lambda - depth_lambda
-            )  # - alpha_reg_lambda)
+                1.0
+                - opt.lambda_dssim
+                - alpha_lambda
+                - depth_lambda
+                - opt.lambda_alpha_reg
+            )
             * Ll1
-            + opt.lambda_dssim * (1.0 - ssim_score)
+            + opt.lambda_dssim * Ldssim
             + alpha_lambda * alpha_loss
             + depth_lambda * depth_loss
-            # + alpha_reg_lambda * alpha_reg_loss
+            + opt.lambda_alpha_reg * alpha_reg_loss
         )
 
         loss.backward()

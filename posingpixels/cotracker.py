@@ -333,10 +333,18 @@ class CoPoseTracker:
             depth = cotracker_input.get_gt_depth(frame)
             alpha = (depth > 0).astype(int)
             bbox = cotracker_input.bboxes[frame]
+            
 
             rgb = rgb[bbox[1] : bbox[3], bbox[0] : bbox[2]]
             alpha = alpha[bbox[1] : bbox[3], bbox[0] : bbox[2]]
             depth = depth[bbox[1] : bbox[3], bbox[0] : bbox[2]]
+            
+            if rgb.shape[0] == 0 or rgb.shape[1] == 0:
+                print("Empty query frame at", frame)
+                rgb = np.zeros((self.cotracker_resolution[0], self.cotracker_resolution[1], 3))
+                alpha = np.zeros((self.cotracker_resolution[0], self.cotracker_resolution[1]))
+                depth = np.zeros((self.cotracker_resolution[0], self.cotracker_resolution[1]))
+            
             # Upscale to cotracker_resolution
             wh = (self.cotracker_resolution[1], self.cotracker_resolution[0])
             rgb = cv2.resize(rgb, wh, interpolation=cv2.INTER_LINEAR)
@@ -453,7 +461,8 @@ class CropCoPoseTracker(CoPoseTracker):
 
         return pred_coords, pred_vis, pred_conf, pred_coords_original, cotracker_input
 
-    def get_canonical_poses(self, canonical_pose: np.ndarray):
+    @staticmethod
+    def get_canonical_poses(canonical_pose: np.ndarray):
         canonical_poses = canonical_pose[np.newaxis]
         poses = []
         angles = [np.radians(angle) for angle in [90, 180, 270]]
@@ -467,19 +476,24 @@ class CropCoPoseTracker(CoPoseTracker):
         self._prepare_video_directory(input.video_dir)
         bboxes, scaling = [], []
         for i in tqdm(range(len(input)), desc="Preparing images for CoTracker"):
-            rgb = input.get_rgb(i)
             mask = input.get_mask(i) > self.mask_threshold
-            rgb[mask == 0, :] = 0
             bbox = get_bbox_from_mask(mask)
-            assert bbox
-            rgb, processed_bbox, scaling_factor = process_image_crop(
-                rgb,
-                bbox,
-                padding=10,
-                target_size=self.cotracker_resolution,
-            )
-            bboxes.append(processed_bbox)
-            scaling.append(scaling_factor)
+            # IMPORTANTTODO: Handle case where `bbox is None` better (when the object is fully occluded)
+            # For now, initialize to previous frame's bbox
+            if bbox is None:
+                bboxes.append(bboxes[-1])
+                scaling.append(scaling[-1])
+            else:
+                rgb = input.get_rgb(i)
+                rgb[mask == 0, :] = 0
+                rgb, processed_bbox, scaling_factor = process_image_crop(
+                    rgb,
+                    bbox,
+                    padding=10,
+                    target_size=self.cotracker_resolution,
+                )
+                bboxes.append(processed_bbox)
+                scaling.append(scaling_factor)
 
             cv2.imwrite(
                 os.path.join(input.video_dir, f"{i:05d}.jpg"),

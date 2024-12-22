@@ -312,7 +312,7 @@ class CanonicalPointSampler:
         threshold: float = 0.9,
         alpha_margin: int = 10,
         max_alpha_change: float = 0.01,
-        depth_margin: int = 10,
+        depth_margin: int = 6,
         depth_change_threshold: float = 0.02,
     ):
         """

@@ -3,6 +3,7 @@ pip install "git+https://github.com/facebookresearch/pytorch3d.git"
 pip install xformers==0.0.22
 pip install pyrender
 pip install ffmpeg-python
+pip install imageio-ffmpeg
 
 cd submodules/Connected_components_PyTorch
 python setup.py install

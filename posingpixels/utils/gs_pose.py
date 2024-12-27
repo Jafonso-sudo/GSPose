@@ -120,7 +120,7 @@ def create_or_load_gaussian_splat_from_ycbineoat(
         else:
             args = parser.parse_args()  # if run in terminal
 
-        print(f"Creating 3D-OGS model for {dataset.videoname_to_object[dataset.video_name]} ")
+        print(f"Creating 3D-OGS model") # for {dataset.videoname_to_object[dataset.video_name]} ")
         gs_pipeData = gaussian_PipeP.extract(args)
         gs_modelData = gaussian_ModelP.extract(args)
         gs_optimData = gaussian_OptimP.extract(args)

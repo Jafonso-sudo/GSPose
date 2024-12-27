@@ -146,6 +146,11 @@ def create_reference_database_from_RGB_images(model_func, obj_dataset, device, s
                                                             orig_wid=image.shape[1],
                                                             )# 1xHxWx1
             coseg_mask_path = ref_data['coseg_mask_path']
+            # GS-Pose Mask is not very good, use GT mask instead
+            if 'mask_path' in ref_data:
+                orig_mask = torch.tensor(cv2.imread(ref_data['mask_path'], cv2.IMREAD_GRAYSCALE) / 255.0)
+
+
             orig_mask = (orig_mask.detach().cpu().squeeze() * 255).numpy().astype(np.uint8) # HxW
             if not os.path.exists(os.path.dirname(coseg_mask_path)):
                 os.makedirs(os.path.dirname(coseg_mask_path))

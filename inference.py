@@ -1052,11 +1052,13 @@ def render_Gaussian_object_model_and_get_radii(obj_gaussians, camK, pose, img_he
     obj_gaussians.initialize_pose()
     FovX = focal2fov(camK[0, 0], img_wid)
     FovY = focal2fov(camK[1, 1], img_hei)
+    cx = (camK[0, 2] - img_wid / 2) / (img_wid / 2)
+    cy = (camK[1, 2] - img_hei / 2) / (img_hei / 2)
     target_image = torch.zeros((3, img_hei, img_wid)).to(device)
     gs_camera = GS_Camera(T=pose[:3, 3],
                           R=pose[:3, :3].T, 
                           FoVx=FovX, FoVy=FovY,
-                          cx_offset=0, cy_offset=0,
+                          cx_offset=cx, cy_offset=cy,
                           image=target_image, colmap_id=0, uid=0, image_name='', 
                           gt_alpha_mask=None, data_device=device)    
     render_info = GS_Renderer(gs_camera, obj_gaussians, gaussian_PipeP, gaussian_BG)
@@ -1072,11 +1074,13 @@ def render_Gaussian_object_model(obj_gaussians, camK, pose, img_hei, img_wid, de
     obj_gaussians.initialize_pose()
     FovX = focal2fov(camK[0, 0], img_wid)
     FovY = focal2fov(camK[1, 1], img_hei)
+    cx = (camK[0, 2] - img_wid / 2) / (img_wid / 2)
+    cy = (camK[1, 2] - img_hei / 2) / (img_hei / 2)
     target_image = torch.zeros((3, img_hei, img_wid)).to(device)
     gs_camera = GS_Camera(T=pose[:3, 3],
                           R=pose[:3, :3].T, 
                           FoVx=FovX, FoVy=FovY,
-                          cx_offset=0, cy_offset=0,
+                          cx_offset=cx, cy_offset=cy,
                           image=target_image, colmap_id=0, uid=0, image_name='', 
                           gt_alpha_mask=None, data_device=device)    
     render_img = GS_Renderer(gs_camera, obj_gaussians, gaussian_PipeP, gaussian_BG)['render']

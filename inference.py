@@ -906,6 +906,7 @@ def GS_Tracker(model_func, ref_database, frame, camK, prev_pose):
     target_image = zoom_image.permute(2, 0, 1).to(device) # 3xSxS
 
     fg_trunc_mask = (target_image.sum(dim=0, keepdim=True) > 0).type(torch.float32) # 1xSxS
+    fg_trunc_mask_bin_np = fg_trunc_mask.squeeze().detach().cpu().numpy().astype(np.uint8) * 255
     
     with torch.no_grad():
         target_mask = model_func.query_cosegmentation(
@@ -936,6 +937,7 @@ def GS_Tracker(model_func, ref_database, frame, camK, prev_pose):
     for iter_step in range(CFG.MAX_STEPS):
         optimizer.zero_grad()
         render_img = GS_Renderer(track_camera, obj_gaussians, gaussian_PipeP, gaussian_BG)['render'] * fg_trunc_mask
+        render_img_np = render_img.permute(1, 2, 0).detach().cpu().numpy()
         loss = 0
         
         rgb_loss = L1Loss(render_img, target_image)

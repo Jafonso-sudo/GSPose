@@ -1137,7 +1137,11 @@ def GS_Tracker(model_func, ref_database, frame, camK, prev_pose):
     target_image *= target_mask
     for iter_step in range(CFG.MAX_STEPS):
         optimizer.zero_grad()
-        render_img = GS_Renderer(track_camera, obj_gaussians, gaussian_PipeP, gaussian_BG)['render'] * fg_trunc_mask
+        render_info = GS_Renderer(track_camera, obj_gaussians, gaussian_PipeP, gaussian_BG)
+        original_render = render_info['render']
+        render_img = render_info['render'] * fg_trunc_mask
+        original_render_img_np = original_render.permute(1, 2, 0).detach().cpu().numpy()
+        render_img_np = render_img.permute(1, 2, 0).detach().cpu().numpy()
         loss = 0
         
         rgb_loss = L1Loss(render_img, target_image)

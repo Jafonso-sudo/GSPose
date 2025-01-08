@@ -272,6 +272,22 @@ for video_name, obj_name in YCBinEOATDataset.videoname_to_object.items():
         
     gsp_video_frames = np.stack(gsp_video_frames, axis=0)
     print(gsp_video_frames.shape)
+    
+    # SAVE RESULTS ============================
+    # Save poses and initial poses to file
+    gsp_pose_file = os.path.join(demo_data_dir, f'{video_name}_gsp_poses.pkl')
+    gsp_init_pose_file = os.path.join(demo_data_dir, f'{video_name}_gsp_init_poses.pkl')
+    with open(gsp_pose_file, 'wb') as pf:
+        pickle.dump(gsp_poses, pf)
+    with open(gsp_init_pose_file, 'wb') as ipf:
+        pickle.dump(gsp_initial_poses, ipf)
+    print('Save poses to ', gsp_pose_file)
+    print('Save initial poses to ', gsp_init_pose_file)
+    # Save runtime to file
+    gsp_runtime_file = os.path.join(demo_data_dir, f'{video_name}_gsp_runtime.txt')
+    with open(gsp_runtime_file, 'w') as rf:
+        rf.write(f'{gsp_accum_runtime:.2f}')
+    print('Save runtime to ', gsp_runtime_file)
 
     # estimate the pose for the first frame
     start_idx = 0
@@ -395,4 +411,15 @@ for video_name, obj_name in YCBinEOATDataset.videoname_to_object.items():
         if (view_idx + 1) % 30 == 0:
             print('[{}/{}], \t{:.1f} FPS'.format(view_idx+1, num_frames, (view_idx - start_idx) / track_accum_runtime))
 
-            
+    # SAVE RESULTS ============================
+    
+    # Save track poses to file
+    track_pose_file = os.path.join(demo_data_dir, f'{video_name}_gsp_track_poses.pkl')
+    with open(track_pose_file, 'wb') as pf:
+        pickle.dump(track_poses, pf)
+    print('Save poses to ', track_pose_file)
+    # Save runtime to file
+    track_runtime_file = os.path.join(demo_data_dir, f'{video_name}_gsp_track_runtime.txt')
+    with open(track_runtime_file, 'w') as rf:
+        rf.write(f'{track_accum_runtime:.2f}')
+    print('Save runtime to ', track_runtime_file)

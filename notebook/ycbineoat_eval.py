@@ -71,7 +71,6 @@ model_net.eval()
 print('Model weights are loaded!')
 
 for video_name, obj_name in YCBinEOATDataset.videoname_to_object.items():
-    if video_name != "tomato_soup_can_yalehand0": continue
     print(f'Processing video: {video_name}, object: {obj_name}')
     demo_obj_dir = os.path.abspath(os.path.join(PROJ_ROOT, 'data', 'objects', obj_name))
     demo_data_dir = os.path.abspath(os.path.join(PROJ_ROOT, 'data', 'inputs', video_name))

@@ -58,8 +58,7 @@ class CADModel(RenderableModel):
         self.bbox = get_bbox_from_size(self.obj_size)
 
     def render(self, pose: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        rgb, depth = self.renderer.render(pose, self.mesh)
-        alpha = (depth > 0).astype(float)
+        rgb, alpha, depth = self.renderer.render(pose, self.mesh, return_alpha=True)
         return rgb, depth, alpha
 
 
@@ -152,7 +151,7 @@ class CADModelDataset(torch.utils.data.Dataset):
         if not os.path.exists(self.cad_mask_dir):
             os.makedirs(self.cad_mask_dir)
 
-        T = np.array([0, 0, self.obj_diameter * 1.3])
+        T = np.array([0, 0, 0.2 + self.obj_diameter / 2.0]) # Why 0.2? Because it's the near frustum plane in the CUDA renderer
         poses = []
         for i in tqdm(range(num_samples)):
             R = self.random_rotation_matrix()

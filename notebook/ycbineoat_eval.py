@@ -76,6 +76,11 @@ for video_name, obj_name in YCBinEOATDataset.videoname_to_object.items():
     demo_data_dir = os.path.abspath(os.path.join(PROJ_ROOT, 'data', 'inputs', video_name))
     refer_seq_dir = demo_obj_dir
     query_seq_dir = demo_data_dir
+    
+    res_files = os.path.join(demo_data_dir, f'{video_name}_gsp_poses.pkl')
+    if os.path.exists(res_files):
+        print(f'Found existing results for {video_name}, skip processing')
+        continue
 
     video_dataset = YCBinEOATDataset(demo_data_dir, demo_obj_dir)
     object_dataset = CADModelDataset(demo_obj_dir, video_dataset.K, video_dataset.H, video_dataset.W)
@@ -171,6 +176,7 @@ for video_name, obj_name in YCBinEOATDataset.videoname_to_object.items():
     start_idx = 0
     gsp_accum_runtime = 0
     num_frames = len(query_video_frames)
+    obj_data = prev_obj_data = None
     for view_idx in tqdm(range(num_frames)):    
         camK = query_video_camKs[view_idx]
         image = query_video_frames[view_idx]
@@ -195,11 +201,21 @@ for video_name, obj_name in YCBinEOATDataset.videoname_to_object.items():
 
         run_timer = time.time()
         
-        obj_data = perform_segmentation_and_encoding(model_net, que_image, reference_database, device=device)
-        obj_data['camK'] = camK.to(device)
-        obj_data['img_scale'] = max(image.shape[:2])
-        obj_data['bbox_scale'] /= query_rescaling_factor  # back to the original image scale
-        obj_data['bbox_center'] /= query_rescaling_factor # back to the original image scale
+        try:
+            obj_data = perform_segmentation_and_encoding(model_net, que_image, reference_database, device=device)
+            obj_data['camK'] = camK.to(device)
+            obj_data['img_scale'] = max(image.shape[:2])
+            obj_data['bbox_scale'] /= query_rescaling_factor  # back to the original image scale
+            obj_data['bbox_center'] /= query_rescaling_factor # back to the original image scale
+        except Exception as e:
+            print(e)
+            # If segmentation fails, use the previous frame's data
+            if prev_obj_data is not None:
+                obj_data = prev_obj_data.copy()
+            else:
+                raise ValueError('Segmentation failed for the first frame')
+            
+        prev_obj_data = obj_data.copy()
         
         try:
             init_RTs = multiple_initial_pose_inference(obj_data, ref_database=reference_database, device=device)

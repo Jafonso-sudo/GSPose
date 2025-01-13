@@ -1052,11 +1052,13 @@ def render_Gaussian_object_model_and_get_radii(obj_gaussians, camK, pose, img_he
     obj_gaussians.initialize_pose()
     FovX = focal2fov(camK[0, 0], img_wid)
     FovY = focal2fov(camK[1, 1], img_hei)
+    cx = (camK[0, 2] - img_wid / 2) / (img_wid / 2)
+    cy = (camK[1, 2] - img_hei / 2) / (img_hei / 2)
     target_image = torch.zeros((3, img_hei, img_wid)).to(device)
     gs_camera = GS_Camera(T=pose[:3, 3],
                           R=pose[:3, :3].T, 
                           FoVx=FovX, FoVy=FovY,
-                          cx_offset=0, cy_offset=0,
+                          cx_offset=cx, cy_offset=cy,
                           image=target_image, colmap_id=0, uid=0, image_name='', 
                           gt_alpha_mask=None, data_device=device)    
     render_info = GS_Renderer(gs_camera, obj_gaussians, gaussian_PipeP, gaussian_BG)
@@ -1072,11 +1074,13 @@ def render_Gaussian_object_model(obj_gaussians, camK, pose, img_hei, img_wid, de
     obj_gaussians.initialize_pose()
     FovX = focal2fov(camK[0, 0], img_wid)
     FovY = focal2fov(camK[1, 1], img_hei)
+    cx = (camK[0, 2] - img_wid / 2) / (img_wid / 2)
+    cy = (camK[1, 2] - img_hei / 2) / (img_hei / 2)
     target_image = torch.zeros((3, img_hei, img_wid)).to(device)
     gs_camera = GS_Camera(T=pose[:3, 3],
                           R=pose[:3, :3].T, 
                           FoVx=FovX, FoVy=FovY,
-                          cx_offset=0, cy_offset=0,
+                          cx_offset=cx, cy_offset=cy,
                           image=target_image, colmap_id=0, uid=0, image_name='', 
                           gt_alpha_mask=None, data_device=device)    
     render_img = GS_Renderer(gs_camera, obj_gaussians, gaussian_PipeP, gaussian_BG)['render']
@@ -1133,7 +1137,11 @@ def GS_Tracker(model_func, ref_database, frame, camK, prev_pose):
     target_image *= target_mask
     for iter_step in range(CFG.MAX_STEPS):
         optimizer.zero_grad()
-        render_img = GS_Renderer(track_camera, obj_gaussians, gaussian_PipeP, gaussian_BG)['render'] * fg_trunc_mask
+        render_info = GS_Renderer(track_camera, obj_gaussians, gaussian_PipeP, gaussian_BG)
+        original_render = render_info['render']
+        render_img = render_info['render'] * fg_trunc_mask
+        original_render_img_np = original_render.permute(1, 2, 0).detach().cpu().numpy()
+        render_img_np = render_img.permute(1, 2, 0).detach().cpu().numpy()
         loss = 0
         
         rgb_loss = L1Loss(render_img, target_image)

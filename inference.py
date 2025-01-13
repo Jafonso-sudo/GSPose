@@ -887,7 +887,7 @@ def render_Gaussian_object_model(obj_gaussians, camK, pose, img_hei, img_wid, de
     
     return render_img_np
 
-def GS_Tracker(model_func, ref_database, frame, camK, prev_pose):
+def GS_Tracker(model_func, ref_database, frame, camK, prev_pose, save_dir=None, frame_i=None):
     zoom_outp = gs_utils.zoom_in_and_crop_with_offset(image=frame, K=camK, 
                                                         t=prev_pose[:3, 3],
                                                         radius=ref_database['bbox3d_diameter']/2,
@@ -913,6 +913,13 @@ def GS_Tracker(model_func, ref_database, frame, camK, prev_pose):
             model_func.extract_DINOv2_feature(target_image[None]), 
             x_ref=ref_database['obj_fps_feats'], ref_mask=ref_database['obj_fps_masks'],
         ).sigmoid().squeeze(0)
+        # Save the target image and the mask
+        if save_dir is not None:
+            target_image_np = (target_image.permute(1, 2, 0) * 255).detach().cpu().numpy().astype(np.uint8)
+            target_mask_np = (target_mask * 255).permute(1, 2, 0).detach().cpu().numpy().astype(np.uint8)
+            cv2.imwrite(os.path.join(save_dir, f'{frame_i}_target_image.png'), target_image_np[:, :, ::-1])
+            cv2.imwrite(os.path.join(save_dir, f'{frame_i}_target_mask.png'), target_mask_np)
+            
 
     zoom_image_np = (target_image.detach().cpu().permute(1, 2, 0) * 255).numpy().astype(np.uint8)
     

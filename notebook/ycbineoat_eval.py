@@ -52,6 +52,8 @@ MSELoss = torch.nn.MSELoss(reduction='mean')
 SSIM_METRIC = SSIM(data_range=1, size_average=True, channel=3) # channel=1 for grayscale images
 MS_SSIM_METRIC = MS_SSIM(data_range=1, size_average=True, channel=3)
 
+SAVE_FILES_NAME = 'my_model'
+
 
 from inference import *
 from misc_utils import gs_utils
@@ -77,7 +79,9 @@ for video_name, obj_name in YCBinEOATDataset.videoname_to_object.items():
     refer_seq_dir = demo_obj_dir
     query_seq_dir = demo_data_dir
     
-    res_files = os.path.join(demo_data_dir, f'{video_name}_gsp_poses.pkl')
+    save_zoomed_track_dir = os.path.join(demo_data_dir, 'zoomed_track_images')
+    
+    res_files = os.path.join(demo_data_dir, f'{video_name}_gsp_track_poses_{SAVE_FILES_NAME}.pkl')
     if os.path.exists(res_files):
         print(f'Found existing results for {video_name}, skip processing')
         continue
@@ -157,153 +161,154 @@ for video_name, obj_name in YCBinEOATDataset.videoname_to_object.items():
     query_video_frames = np.array([video_dataset.get_rgb(i) for i in range(len(video_dataset))])
     query_video_frames.shape
 
+    if not os.path.exists(save_zoomed_track_dir):
+        os.makedirs(save_zoomed_track_dir)
+
+    # CFG.MAX_STEPS = 400
+    # CFG.START_LR = 5e-3
+    # CFG.END_LR = 0
+
+    # gsp_initial_poses = list()
+    # gsp_poses = list()
+    # gsp_video_frames = list()
 
 
-    CFG.MAX_STEPS = 400
-    CFG.START_LR = 5e-3
-    CFG.END_LR = 0
+    # scale = 1.45
+    # thickness = 5
+    # color = (255, 255, 0)
+    # font = cv2.FONT_HERSHEY_SIMPLEX
 
-    gsp_initial_poses = list()
-    gsp_poses = list()
-    gsp_video_frames = list()
-
-
-    scale = 1.45
-    thickness = 5
-    color = (255, 255, 0)
-    font = cv2.FONT_HERSHEY_SIMPLEX
-
-    start_idx = 0
-    gsp_accum_runtime = 0
-    num_frames = len(query_video_frames)
-    obj_data = prev_obj_data = None
-    for view_idx in tqdm(range(num_frames)):    
-        camK = query_video_camKs[view_idx]
-        image = query_video_frames[view_idx]
-        image = torch.as_tensor(np.array(image), dtype=torch.float32) / 255.0
+    # start_idx = 0
+    # gsp_accum_runtime = 0
+    # num_frames = len(query_video_frames)
+    # obj_data = prev_obj_data = None
+    # for view_idx in tqdm(range(num_frames)):    
+    #     camK = query_video_camKs[view_idx]
+    #     image = query_video_frames[view_idx]
+    #     image = torch.as_tensor(np.array(image), dtype=torch.float32) / 255.0
         
-        camK = torch.as_tensor(camK, dtype=torch.float32)
+    #     camK = torch.as_tensor(camK, dtype=torch.float32)
         
-        target_size = CFG.zoom_image_scale
-        raw_hei, raw_wid = image.shape[:2]
-        raw_long_size = max(raw_hei, raw_wid)
-        raw_short_size = min(raw_hei, raw_wid)
-        raw_aspect_ratio = raw_short_size / raw_long_size
-        if raw_hei < raw_wid:
-            new_wid = CFG.query_longside_scale
-            new_hei = int(new_wid * raw_aspect_ratio)
-        else:
-            new_hei = CFG.query_longside_scale
-            new_wid = int(new_hei * raw_aspect_ratio)
-        query_rescaling_factor = CFG.query_longside_scale / raw_long_size
-        que_image = image[None, ...].permute(0, 3, 1, 2).to(device)
-        que_image = torch_F.interpolate(que_image, size=(new_hei, new_wid), mode='bilinear', align_corners=True)
+    #     target_size = CFG.zoom_image_scale
+    #     raw_hei, raw_wid = image.shape[:2]
+    #     raw_long_size = max(raw_hei, raw_wid)
+    #     raw_short_size = min(raw_hei, raw_wid)
+    #     raw_aspect_ratio = raw_short_size / raw_long_size
+    #     if raw_hei < raw_wid:
+    #         new_wid = CFG.query_longside_scale
+    #         new_hei = int(new_wid * raw_aspect_ratio)
+    #     else:
+    #         new_hei = CFG.query_longside_scale
+    #         new_wid = int(new_hei * raw_aspect_ratio)
+    #     query_rescaling_factor = CFG.query_longside_scale / raw_long_size
+    #     que_image = image[None, ...].permute(0, 3, 1, 2).to(device)
+    #     que_image = torch_F.interpolate(que_image, size=(new_hei, new_wid), mode='bilinear', align_corners=True)
 
-        run_timer = time.time()
+    #     run_timer = time.time()
         
-        try:
-            obj_data = perform_segmentation_and_encoding(model_net, que_image, reference_database, device=device)
-            obj_data['camK'] = camK.to(device)
-            obj_data['img_scale'] = max(image.shape[:2])
-            obj_data['bbox_scale'] /= query_rescaling_factor  # back to the original image scale
-            obj_data['bbox_center'] /= query_rescaling_factor # back to the original image scale
-        except Exception as e:
-            print(e)
-            # If segmentation fails, use the previous frame's data
-            if prev_obj_data is not None:
-                obj_data = prev_obj_data.copy()
-            else:
-                raise ValueError('Segmentation failed for the first frame')
+    #     try:
+    #         obj_data = perform_segmentation_and_encoding(model_net, que_image, reference_database, device=device)
+    #         obj_data['camK'] = camK.to(device)
+    #         obj_data['img_scale'] = max(image.shape[:2])
+    #         obj_data['bbox_scale'] /= query_rescaling_factor  # back to the original image scale
+    #         obj_data['bbox_center'] /= query_rescaling_factor # back to the original image scale
+    #     except Exception as e:
+    #         print(e)
+    #         # If segmentation fails, use the previous frame's data
+    #         if prev_obj_data is not None:
+    #             obj_data = prev_obj_data.copy()
+    #         else:
+    #             raise ValueError('Segmentation failed for the first frame')
             
-        prev_obj_data = obj_data.copy()
+    #     prev_obj_data = obj_data.copy()
         
-        try:
-            init_RTs = multiple_initial_pose_inference(obj_data, ref_database=reference_database, device=device)
-        except Exception as e:
-            print(e)
-            init_RTs = torch.eye(4)[None].numpy()
+    #     try:
+    #         init_RTs = multiple_initial_pose_inference(obj_data, ref_database=reference_database, device=device)
+    #     except Exception as e:
+    #         print(e)
+    #         init_RTs = torch.eye(4)[None].numpy()
 
-        gsp_initial_poses.append(init_RTs)
+    #     gsp_initial_poses.append(init_RTs)
             
-        refiner_oupt = multiple_refine_pose_with_GS_refiner(
-            obj_data, init_pose=init_RTs, gaussians=reference_database['obj_gaussians'], device=device)
+    #     refiner_oupt = multiple_refine_pose_with_GS_refiner(
+    #         obj_data, init_pose=init_RTs, gaussians=reference_database['obj_gaussians'], device=device)
                 
-        gsp_accum_runtime += time.time() - run_timer
+    #     gsp_accum_runtime += time.time() - run_timer
 
-        gsp_pose = refiner_oupt['refined_RT']
-        iter_step = refiner_oupt['iter_step']
-        bbox_scale = refiner_oupt['bbox_scale']
-        bbox_center = refiner_oupt['bbox_center']
-        gsp_render_frame = refiner_oupt['render_img']
-        gsp_poses.append(gsp_pose)
+    #     gsp_pose = refiner_oupt['refined_RT']
+    #     iter_step = refiner_oupt['iter_step']
+    #     bbox_scale = refiner_oupt['bbox_scale']
+    #     bbox_center = refiner_oupt['bbox_center']
+    #     gsp_render_frame = refiner_oupt['render_img']
+    #     gsp_poses.append(gsp_pose)
         
-        small_hei = raw_hei // 3 # downscale the image for visualization
-        small_wid = raw_wid // 3
+    #     small_hei = raw_hei // 3 # downscale the image for visualization
+    #     small_wid = raw_wid // 3
         
-    #     gsp_render_frame = render_Gaussian_object_model(obj_gaussians, camK=camK, pose=gsp_RT, 
-    #                                                     img_hei=raw_hei, img_wid=raw_wid, device=device)
+    # #     gsp_render_frame = render_Gaussian_object_model(obj_gaussians, camK=camK, pose=gsp_RT, 
+    # #                                                     img_hei=raw_hei, img_wid=raw_wid, device=device)
         
-        gsp_render_frame = gs_utils.zoom_out_and_uncrop_image(gsp_render_frame, # 3xSxS
-                                                                bbox_scale=bbox_scale,
-                                                                bbox_center=bbox_center,
-                                                                orig_hei=image.shape[0],
-                                                                orig_wid=image.shape[1],
-                                                                ).detach().cpu().squeeze() # HxWx3
-        gsp_render_frame = (torch.clamp(gsp_render_frame, 0, 1.0) * 255).numpy().astype(np.uint8)
+    #     gsp_render_frame = gs_utils.zoom_out_and_uncrop_image(gsp_render_frame, # 3xSxS
+    #                                                             bbox_scale=bbox_scale,
+    #                                                             bbox_center=bbox_center,
+    #                                                             orig_hei=image.shape[0],
+    #                                                             orig_wid=image.shape[1],
+    #                                                             ).detach().cpu().squeeze() # HxWx3
+    #     gsp_render_frame = (torch.clamp(gsp_render_frame, 0, 1.0) * 255).numpy().astype(np.uint8)
         
-        query_img_np = (image * 255).numpy().astype(np.uint8)
-        gsp_RT = torch.as_tensor(gsp_pose, dtype=torch.float32)
-        gsp_bbox_KRT = torch.einsum('ij,kj->ki', gsp_RT[:3, :3], cannon_3D_bbox.cpu()) + gsp_RT[:3, 3][None, :]
-        gsp_bbox_KRT = torch.einsum('ij,kj->ki', camK, gsp_bbox_KRT)
-        gsp_bbox_pts = (gsp_bbox_KRT[:, :2] / gsp_bbox_KRT[:, 2:3]).type(torch.int64)
-        track_bbox_pts = gsp_bbox_pts.numpy()
+    #     query_img_np = (image * 255).numpy().astype(np.uint8)
+    #     gsp_RT = torch.as_tensor(gsp_pose, dtype=torch.float32)
+    #     gsp_bbox_KRT = torch.einsum('ij,kj->ki', gsp_RT[:3, :3], cannon_3D_bbox.cpu()) + gsp_RT[:3, 3][None, :]
+    #     gsp_bbox_KRT = torch.einsum('ij,kj->ki', camK, gsp_bbox_KRT)
+    #     gsp_bbox_pts = (gsp_bbox_KRT[:, :2] / gsp_bbox_KRT[:, 2:3]).type(torch.int64)
+    #     track_bbox_pts = gsp_bbox_pts.numpy()
         
-        gsp_bbox3d_frame = query_img_np.copy()
-        gsp_bbox3d_frame = gs_utils.draw_3d_bounding_box(gsp_bbox3d_frame, track_bbox_pts, color=color, linewidth=20)
-        gsp_bbox3d_frame = cv2.resize(gsp_bbox3d_frame, (small_wid, small_hei))
+    #     gsp_bbox3d_frame = query_img_np.copy()
+    #     gsp_bbox3d_frame = gs_utils.draw_3d_bounding_box(gsp_bbox3d_frame, track_bbox_pts, color=color, linewidth=20)
+    #     gsp_bbox3d_frame = cv2.resize(gsp_bbox3d_frame, (small_wid, small_hei))
             
-        query_img_np = cv2.resize(query_img_np, (small_wid, small_hei))
-        gsp_render_frame = cv2.resize(gsp_render_frame, (small_wid, small_hei))
-        gsp_overlay_frame = cv2.addWeighted(
-            cv2.cvtColor(gsp_render_frame.copy(), cv2.COLOR_BGR2HSV), 0.6, query_img_np, 0.4, 1)
+    #     query_img_np = cv2.resize(query_img_np, (small_wid, small_hei))
+    #     gsp_render_frame = cv2.resize(gsp_render_frame, (small_wid, small_hei))
+    #     gsp_overlay_frame = cv2.addWeighted(
+    #         cv2.cvtColor(gsp_render_frame.copy(), cv2.COLOR_BGR2HSV), 0.6, query_img_np, 0.4, 1)
                 
-        cv2.putText(query_img_np,     'Input Video', (100, 40), font, scale, color, thickness=thickness)
-        cv2.putText(gsp_bbox3d_frame, 'Estimated Pose', (60, 40), font, scale, color, thickness=thickness)
+    #     cv2.putText(query_img_np,     'Input Video', (100, 40), font, scale, color, thickness=thickness)
+    #     cv2.putText(gsp_bbox3d_frame, 'Estimated Pose', (60, 40), font, scale, color, thickness=thickness)
 
-        cv2.putText(gsp_render_frame,    'Gaussian rendering', (20, 40), font, scale, color, thickness=thickness)
-        cv2.putText(gsp_render_frame,    'with estimated pose', (10, 80), font, scale, color, thickness=thickness)
+    #     cv2.putText(gsp_render_frame,    'Gaussian rendering', (20, 40), font, scale, color, thickness=thickness)
+    #     cv2.putText(gsp_render_frame,    'with estimated pose', (10, 80), font, scale, color, thickness=thickness)
         
-        cv2.putText(gsp_overlay_frame, 'Overlay rendering', (40, 40), font, scale, color, thickness=thickness)
-        cv2.putText(gsp_overlay_frame, 'on input image', (60, 80), font, scale, color, thickness=thickness)
+    #     cv2.putText(gsp_overlay_frame, 'Overlay rendering', (40, 40), font, scale, color, thickness=thickness)
+    #     cv2.putText(gsp_overlay_frame, 'on input image', (60, 80), font, scale, color, thickness=thickness)
 
-        wihite_stripe = np.ones_like(gsp_bbox3d_frame)[:, :50, :] * 255    
-        concat_frame = np.concatenate([gsp_bbox3d_frame, wihite_stripe,
-                                    gsp_render_frame, wihite_stripe,
-                                    gsp_overlay_frame], axis=1)
-        gsp_video_frames.append(concat_frame)
+    #     wihite_stripe = np.ones_like(gsp_bbox3d_frame)[:, :50, :] * 255    
+    #     concat_frame = np.concatenate([gsp_bbox3d_frame, wihite_stripe,
+    #                                 gsp_render_frame, wihite_stripe,
+    #                                 gsp_overlay_frame], axis=1)
+    #     gsp_video_frames.append(concat_frame)
         
-        if (view_idx + 1) % 30 == 0:
-            print('[{}/{}], \t refining_step:{}, \t {:.1f} FPS'.format(
-                view_idx+1, num_frames, iter_step, (view_idx - start_idx) / gsp_accum_runtime))
+    #     if (view_idx + 1) % 30 == 0:
+    #         print('[{}/{}], \t refining_step:{}, \t {:.1f} FPS'.format(
+    #             view_idx+1, num_frames, iter_step, (view_idx - start_idx) / gsp_accum_runtime))
         
-    gsp_video_frames = np.stack(gsp_video_frames, axis=0)
-    print(gsp_video_frames.shape)
+    # gsp_video_frames = np.stack(gsp_video_frames, axis=0)
+    # print(gsp_video_frames.shape)
     
-    # SAVE RESULTS ============================
-    # Save poses and initial poses to file
-    gsp_pose_file = os.path.join(demo_data_dir, f'{video_name}_gsp_poses.pkl')
-    gsp_init_pose_file = os.path.join(demo_data_dir, f'{video_name}_gsp_init_poses.pkl')
-    with open(gsp_pose_file, 'wb') as pf:
-        pickle.dump(gsp_poses, pf)
-    with open(gsp_init_pose_file, 'wb') as ipf:
-        pickle.dump(gsp_initial_poses, ipf)
-    print('Save poses to ', gsp_pose_file)
-    print('Save initial poses to ', gsp_init_pose_file)
-    # Save runtime to file
-    gsp_runtime_file = os.path.join(demo_data_dir, f'{video_name}_gsp_runtime.txt')
-    with open(gsp_runtime_file, 'w') as rf:
-        rf.write(f'{gsp_accum_runtime:.2f}')
-    print('Save runtime to ', gsp_runtime_file)
+    # # SAVE RESULTS ============================
+    # # Save poses and initial poses to file
+    # gsp_pose_file = os.path.join(demo_data_dir, f'{video_name}_gsp_poses.pkl')
+    # gsp_init_pose_file = os.path.join(demo_data_dir, f'{video_name}_gsp_init_poses.pkl')
+    # with open(gsp_pose_file, 'wb') as pf:
+    #     pickle.dump(gsp_poses, pf)
+    # with open(gsp_init_pose_file, 'wb') as ipf:
+    #     pickle.dump(gsp_initial_poses, ipf)
+    # print('Save poses to ', gsp_pose_file)
+    # print('Save initial poses to ', gsp_init_pose_file)
+    # # Save runtime to file
+    # gsp_runtime_file = os.path.join(demo_data_dir, f'{video_name}_gsp_runtime.txt')
+    # with open(gsp_runtime_file, 'w') as rf:
+    #     rf.write(f'{gsp_accum_runtime:.2f}')
+    # print('Save runtime to ', gsp_runtime_file)
 
     # estimate the pose for the first frame
     start_idx = 0
@@ -365,7 +370,7 @@ for video_name, obj_name in YCBinEOATDataset.videoname_to_object.items():
         
         track_timer = time.time()
         track_outp = GS_Tracker(model_net, frame=image, prev_pose=track_pose, 
-                                camK=camK, ref_database=reference_database)
+                                camK=camK, ref_database=reference_database, frame_i=view_idx,) #save_dir=save_zoomed_track_dir,)
         frame_cost = time.time() - track_timer
         track_accum_runtime += frame_cost
         
@@ -430,12 +435,12 @@ for video_name, obj_name in YCBinEOATDataset.videoname_to_object.items():
     # SAVE RESULTS ============================
     
     # Save track poses to file
-    track_pose_file = os.path.join(demo_data_dir, f'{video_name}_gsp_track_poses.pkl')
+    track_pose_file = os.path.join(demo_data_dir, f'{video_name}_gsp_track_poses_{SAVE_FILES_NAME}.pkl')
     with open(track_pose_file, 'wb') as pf:
         pickle.dump(track_poses, pf)
     print('Save poses to ', track_pose_file)
     # Save runtime to file
-    track_runtime_file = os.path.join(demo_data_dir, f'{video_name}_gsp_track_runtime.txt')
+    track_runtime_file = os.path.join(demo_data_dir, f'{video_name}_gsp_track_runtime_{SAVE_FILES_NAME}.txt')
     with open(track_runtime_file, 'w') as rf:
         rf.write(f'{track_accum_runtime:.2f}')
     print('Save runtime to ', track_runtime_file)

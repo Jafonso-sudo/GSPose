@@ -598,7 +598,9 @@ class CropCoPoseTracker(CoPoseTracker):
             cotracker_online = CoTrackerOnlinePredictor(
                 window_len=self.cotracker_step * 2, offline=False
             ).to(self.device)
+            batch_i = 0
             for batch in tqdm(batch_iterator, desc="Processing batches"):
+                _first_frame_np = batch[0][0].permute(1, 2, 0).cpu().numpy()
                 pred_coords, pred_vis, pred_conf = cotracker_online(
                     video_chunk=batch,
                     is_first_step=is_first_step,
@@ -611,6 +613,7 @@ class CropCoPoseTracker(CoPoseTracker):
                     query_refiner=query_refiner,
                 )
                 is_first_step = False
+                batch_i += 1
 
             del cotracker_online  # Free up memory
 
